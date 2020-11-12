@@ -20,6 +20,7 @@ class Color(IntFlag):
     MAGENTA = auto()
     BLUE = auto()
     CYAN = auto()
+    WHITE = auto()
     BLACK_ON_WHITE = auto()
 
 
@@ -45,6 +46,7 @@ class Direction(IntFlag):
     """
     Screen directions.
     """
+
     NORTH = auto()
     EAST = auto()
     SOUTH = auto()

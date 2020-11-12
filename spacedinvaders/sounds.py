@@ -11,10 +11,12 @@ from functools import partial
 try:
     from simpleaudio import WaveObject
 except ImportError:
+
     class WaveObject:
         """
         Dummy WaveObject if simpleaudio fails to import.
         """
+
         def play(self):
             ...
 
@@ -34,6 +36,7 @@ class Sound:
     If simplesound is not available, the Sound.[SOUND].play
     method is a noop.
     """
+
     EXPLOSION = _load(_resource("media/explosion.wav"))
     INVADER_1 = _load(_resource("media/fastinvader1.wav"))
     INVADER_2 = _load(_resource("media/fastinvader2.wav"))
@@ -43,4 +46,3 @@ class Sound:
     SHOOT = _load(_resource("media/shoot.wav"))
     UFO_HIGH = _load(_resource("media/ufo_highpitch.wav"))
     UFO_LOW = _load(_resource("media/ufo_lowpitch.wav"))
-

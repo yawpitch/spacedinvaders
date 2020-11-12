@@ -302,12 +302,12 @@ class Bullet(Moveable, Killable, Renderable):
     ICON: Icon = make_icon(
         """
          ❚
-                           """
+        """
     )
     DEATH: Optional[Icon] = make_icon(
         """
         ✸✺✸
-                           """
+        """
     )
 
     _IN_FLIGHT: bool = False
@@ -337,7 +337,7 @@ class Bullet(Moveable, Killable, Renderable):
         super().die()
 
     @classmethod
-    def in_flight(cls):
+    def in_flight(cls) -> bool:
         """
         Test if a bullet is in flight.
         """
@@ -353,12 +353,12 @@ class Player(Moveable, Killable, Renderable):
     ICON: Icon = make_icon(
         """
         ▄█▄
-                           """
+        """
     )
     DEATH: Optional[Icon] = make_icon(
         """
         ▘▙▁
-                           """
+        """
     )
 
     def __init__(self, *args, **kwargs):
@@ -391,7 +391,7 @@ class Player(Moveable, Killable, Renderable):
         """
         if not Bullet.in_flight():
             Sound.SHOOT.play()
-            return Bullet(self.x, self.y, speed=2)
+            return Bullet((self.x + (self.x + self.w)) // 2, self.y, speed=2)
         return None
 
     def die(self) -> None:
@@ -401,3 +401,213 @@ class Player(Moveable, Killable, Renderable):
         self.speed = 0
         Sound.EXPLOSION.play()
         super().die()
+
+
+class Squid(Moveable, Killable, Renderable):
+    """
+    The Squid Invader.
+    """
+
+    POINTS: 30
+
+    COLOR: Color = Color.CYAN
+    ICON: Icon = make_icon(
+        """
+        ▗▆▖
+        ▚┳▞
+        """
+    )
+    ALT: Icon = make_icon(
+        """
+        ▗▆▖
+        ▞┳▚
+
+        """
+    )
+    DEATH: Icon = make_icon(
+        """
+        ⟫╳⟪
+        """
+    )
+
+
+class Crab(Moveable, Killable, Renderable):
+    """
+    The Crab Invader.
+    """
+
+    POINTS: 20
+
+    COLOR: Color = Color.CYAN
+    ICON: Icon = make_icon(
+        """
+        ▙▀▟
+        ▘▔▝
+        """
+    )
+    ALT: Icon = make_icon(
+        """
+        ▛▆▜
+        ▔┻▔
+        """
+    )
+    DEATH: Icon = make_icon(
+        """
+        ⟫╳⟪
+        """
+    )
+
+
+class Octopus(Moveable, Killable, Renderable):
+    """
+    The Octopus Invader.
+    """
+
+    POINTS: 10
+
+    COLOR: Color = Color.CYAN
+    ICON: Icon = make_icon(
+        """
+        ▟▆▙
+        ▘▔▝
+        """
+    )
+    ALT: Icon = make_icon(
+        """
+        ▟▆▙
+        ▝▔▘
+        """
+    )
+    DEATH: Icon = make_icon(
+        """
+        ⟫╳⟪
+        """
+    )
+
+
+class Mystery(Moveable, Killable, Renderable):
+    """
+    The Mystery Ship.
+    """
+
+    COLOR: Color = Color.RED
+    ICON: Icon = make_icon(
+        """
+       ▞█▀█▚
+       ▔▘▔▝▔
+        """
+    )
+    DEATH: Icon = make_icon(
+        """
+        ⟫╳⟪
+        """
+    )
+
+
+class Bomb(Moveable, Killable, Renderable):
+    """
+    The Invader's main weapon.
+    """
+
+    COLOR: Color = Color.CYAN
+    ICON: Icon = make_icon(
+        """
+        ⧘
+        """
+    )
+    ALT: Icon = make_icon(
+        """
+        ⧙
+        """
+    )
+    DEATH: Optional[Icon] = make_icon(
+        """
+        ✸✺✸
+        """
+    )
+
+    _IN_FLIGHT: int = 0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._direction = Direction.SOUTH
+        Bomb._IN_FLIGHT += 1
+
+    def wall(self, new_position: int, limit: int) -> int:
+        """
+        Stop on wall impact. Bombs only travel south.
+        """
+        assert self.direction is Direction.SOUTH
+        if new_position > limit - 1:
+            self.die()
+            return limit - 1
+        return new_position
+
+    def die(self):
+        """
+        Kill this bomb.
+        """
+        Bomb._IN_FLIGHT -= 1
+        self.color = Color.GREEN
+        self.speed = 0
+        super().die()
+
+    @classmethod
+    def in_flight(cls) -> int:
+        """
+        Test how many bombs are dropping.
+        """
+        return cls._IN_FLIGHT
+
+
+class SuperBomb(Moveable, Killable, Renderable):
+    """
+    The Invader's alt weapon.
+    """
+
+    COLOR: Color = Color.MAGENTA
+    ICON: Icon = make_icon(
+        """
+        ⧚
+        """
+    )
+    ALT: Icon = make_icon(
+        """
+        ⧛
+        """
+    )
+    DEATH: Optional[Icon] = make_icon(
+        """
+        ✸✺✸
+        """
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._hitpoints = 1
+
+    def die(self):
+        """
+        Kill this bomb.
+        """
+        if self_hitpoints:
+            self._hitpoints -= 1
+        else:
+            super().die()
+
+
+class Barrier(Renderable):
+    """
+    The last line of defense between the Player and the Invaders.
+    """
+
+    COLOR: Color = Color.GREEN
+    ICON: Icon = make_icon(
+        """
+        ▟█████▙
+        ███████
+        ███████
+        ███████
+        ▀▀   ▀▀
+        """
+    )

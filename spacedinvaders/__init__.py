@@ -6,11 +6,13 @@ A textual, terminal spin on an arcade classic.
 # stdlib imports
 import curses
 import locale
+import math
 import time
 
 # local imports
 from .constants import Color, Control, Direction
 from .units import Player, Moveable, Killable, Renderable
+from .utils import colorize
 from .sounds import Sound
 
 locale.setlocale(locale.LC_ALL, "")
@@ -25,6 +27,9 @@ UP_INPUTS = set([Control.UARR, Control.UKEY])
 DOWN_INPUTS = set([Control.DARR, Control.DKEY])
 STOP_INPUTS = UP_INPUTS | DOWN_INPUTS
 
+ARCADE_ASPECT = 256 / 224
+PIXEL_ASPECT = 2.0
+
 
 def init(stdscr):
     """
@@ -36,10 +41,6 @@ def init(stdscr):
     # Don't block waiting for user input
     stdscr.nodelay(True)
 
-    # Start with a blank canvas
-    stdscr.clear()
-    stdscr.refresh()
-
     # Start colors if available
     if curses.has_colors:
         curses.start_color()
@@ -50,26 +51,47 @@ def init(stdscr):
         curses.init_pair(Color.MAGENTA, curses.COLOR_MAGENTA, curses.COLOR_BLACK)
         curses.init_pair(Color.BLUE, curses.COLOR_BLUE, curses.COLOR_BLACK)
         curses.init_pair(Color.CYAN, curses.COLOR_CYAN, curses.COLOR_BLACK)
+        curses.init_pair(Color.WHITE, curses.COLOR_WHITE, curses.COLOR_BLACK)
         curses.init_pair(Color.BLACK_ON_WHITE, curses.COLOR_BLACK, curses.COLOR_WHITE)
 
 
 def game(stdscr):
 
+    height, term_width = stdscr.getmaxyx()
+    play_width = math.ceil(height / ARCADE_ASPECT * PIXEL_ASPECT)
+    if play_width % 2:
+        play_width += 1
+    padding = (term_width - play_width) // 2
+
+    stdscr.resize(height, play_width)
+    stdscr.mvwin(0, padding)
+
     init(stdscr)
 
     # Centering calculations
     height, width = stdscr.getmaxyx()
+
     center_x = int(width // 2)
     center_y = int(height // 2)
 
-    player = Player(center_x, height - 3, speed=0)
+    player = Player(center_x, height - 4, speed=0)
+    lives = 2
+    points = 0
+    credits = 0
 
     last_time = None
 
     units = [player]
-    count = 0
+
+    # Start with a blank canvas
+    stdscr.clear()
+    stdscr.refresh()
+
     # Loop where curr_key is the last character pressed
     while (curr_key := stdscr.getch()) != Control.QUIT:
+
+        if curr_key == curses.KEY_RESIZE:
+            pass
 
         # Modulate the time
         curr_time = time.time()
@@ -88,6 +110,16 @@ def game(stdscr):
         center_x = int(width // 2)
         center_y = int(height // 2)
 
+        from curses.ascii import ctrl
+
+        if curr_key == ord(ctrl("d")):
+            lives = max(0, lives - 1)
+            credits = max(0, credits - 1)
+
+        if curr_key == ord(ctrl("a")):
+            lives = min(3, lives + 1)
+            credits = min(99, credits + 1)
+
         # Handle player actions
         if curr_key == Control.FIRE:
             bullet = player.fire()
@@ -102,15 +134,20 @@ def game(stdscr):
             player.speed = 1
             player.turn(Direction.EAST)
 
-        statusbarstr = f"PLAY | STATUS BAR | Pos: {player.x}, {player.y}"
+        # Render lives and credits
 
-        # Render status bar
-        stdscr.attron(curses.color_pair(Color.BLACK_ON_WHITE))
-        stdscr.addstr(height - 1, 0, statusbarstr)
-        stdscr.addstr(
-            height - 1, len(statusbarstr), " " * (width - len(statusbarstr) - 1)
+        with colorize(stdscr, Color.GREEN):
+            # stdscr.hline(height - 2, 0, curses.ACS_HLINE, width)
+            stdscr.addstr(height - 2, 0, ("━" * (width - 1)).encode(CODEC))
+
+        lives_icons = " ".join(Player.ICON for _ in range(lives))
+        with colorize(stdscr, Color.YELLOW):
+            stdscr.addstr(height - 1, 0, lives_icons.encode(CODEC))
+        credits_digits = f"CREDITS: {credits:02d}".rjust(
+            width - len(lives_icons) - 1, " "
         )
-        stdscr.attroff(curses.color_pair(Color.BLACK_ON_WHITE))
+        with colorize(stdscr, Color.WHITE):
+            stdscr.addstr(height - 1, len(lives_icons), credits_digits)
 
         def _reap(unit: Renderable) -> bool:
             if isinstance(unit, Killable) and unit.is_dead():
@@ -129,10 +166,6 @@ def game(stdscr):
 
         # Refresh the screen
         stdscr.refresh()
-
-        count += 1
-        if count == 250:
-            player.die()
 
 
 def main():
