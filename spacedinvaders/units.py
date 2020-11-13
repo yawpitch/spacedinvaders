@@ -158,9 +158,9 @@ class Renderable:
             self._lines = [l.encode(CODEC) for l in lines]
 
         with colorize(stdscr, self.color):
-            for line in self._lines:
+            for offset_y, line in enumerate(self._lines):
                 try:
-                    stdscr.addstr(self.y, self.x, line)
+                    stdscr.addstr(self.y + offset_y, self.x, line)
                 except curses.error as err:
                     raise ValueError(f"y={self.y}, x={self.x}: {line}") from err
 
@@ -306,7 +306,7 @@ class Bullet(Moveable, Killable, Renderable):
     )
     DEATH: Optional[Icon] = make_icon(
         """
-        ✸✺✸
+         ✺
         """
     )
 
@@ -322,9 +322,9 @@ class Bullet(Moveable, Killable, Renderable):
         Stop on wall impact. Bullet only travels north.
         """
         assert self.direction is Direction.NORTH
-        if new_position < limit + 1:
+        if new_position < limit + 2:
             self.die()
-            return limit + 1
+            return limit + 2
         return new_position
 
     def die(self):
@@ -391,7 +391,7 @@ class Player(Moveable, Killable, Renderable):
         """
         if not Bullet.in_flight():
             Sound.SHOOT.play()
-            return Bullet((self.x + (self.x + self.w)) // 2, self.y, speed=2)
+            return Bullet((self.x + (self.x + self.w)) // 2, self.y - 1, speed = 3)
         return None
 
     def die(self) -> None:
@@ -538,9 +538,9 @@ class Bomb(Moveable, Killable, Renderable):
         Stop on wall impact. Bombs only travel south.
         """
         assert self.direction is Direction.SOUTH
-        if new_position > limit - 1:
+        if new_position > limit - 2:
             self.die()
-            return limit - 1
+            return limit - 2
         return new_position
 
     def die(self):
@@ -604,10 +604,26 @@ class Barrier(Renderable):
     COLOR: Color = Color.GREEN
     ICON: Icon = make_icon(
         """
-        ▟█████▙
-        ███████
-        ███████
-        ███████
-        ▀▀   ▀▀
+        ▟██████▙
+        ████████
+        ████████
+        ████████
+        ▀▀    ▀▀
         """
     )
+
+
+__all__ = [
+    "Barrier",
+    "Bomb",
+    "Bullet",
+    "Crab",
+    "Killable",
+    "Moveable",
+    "Mystery",
+    "Octopus",
+    "Player",
+    "Renderable",
+    "Squid",
+    "SuperBomb",
+]
