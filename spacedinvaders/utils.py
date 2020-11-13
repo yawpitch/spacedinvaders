@@ -14,7 +14,6 @@ from spacedinvaders.constants import Color
 from spacedinvaders.typing import Col, Row, Window
 
 
-
 def regularize(string: str) -> str:
     """
     Regularizes a string, intended for multiline literals.
@@ -45,4 +44,3 @@ def fit_within(text: str, rows: Row, cols: Col) -> List[str]:
     and cols.
     """
     return wrap(shorten(text, (cols - 2) * (rows - 2)), cols=cols - 2)
-

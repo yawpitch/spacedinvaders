@@ -9,6 +9,8 @@ import locale
 import math
 import os
 import time
+from collections import deque
+from random import choice
 from typing import Tuple, Optional
 
 # local imports
@@ -38,6 +40,14 @@ ARENA_WIDTH = BARRIER_WIDTH * 10
 ARENA_HEIGHT = round(ARENA_WIDTH * ARCADE_ASPECT / PIXEL_ASPECT)
 if ARENA_HEIGHT % 2:
     ARENA_HEIGHT += 1
+KOMANDO = deque(
+    [Control.UARR] * 2
+    + [Control.DARR] * 2
+    + [Control.LARR, Control.RARR] * 2
+    + [Control.BKEY, Control.LKEY]
+)
+VADER_COLUMNS = 11
+VADER_ROWS = 5
 
 
 class PlayState:
@@ -45,12 +55,33 @@ class PlayState:
     Class to track the current game state.
     """
 
+    FRAME_ROLLOVER = FRAMERATE * 30
+
     def __init__(self):
+        self._frame: int = 0
         self._score: int = 0
         self._high: int = 999
         self._lives: int = 2
         self._credits: int = 0
         self._bullet: Optional[Bullet] = None
+        self._mystery: Optional[Mystery] = None
+        self.last_wheel: Optional[bool] = None
+        self.last10 = deque(maxlen=10)
+        self.egged = False
+
+    @property
+    def frame(self) -> int:
+        """
+        Current frame.
+        """
+        return self._frame
+
+    @frame.setter
+    def frame(self, val: int) -> int:
+        """
+        Update the current frame.
+        """
+        self._frame = val % self.FRAME_ROLLOVER
 
     @property
     def score(self) -> int:
@@ -123,6 +154,20 @@ class PlayState:
         Update the player's bullet.
         """
         self._bullet = fired
+
+    @property
+    def mystery(self) -> Optional[Mystery]:
+        """
+        The mystery ship on screen, if any.
+        """
+        return self._mystery
+
+    @mystery.setter
+    def mystery(self, fired: Optional[Mystery]) -> None:
+        """
+        Update the mystery ship on screen.
+        """
+        self._mystery = fired
 
 
 def initialize_screen(stdscr: Window) -> None:
@@ -268,14 +313,25 @@ def game_loop(stdscr: Window) -> None:
 
     last_time = None
 
-    units = [player]
-
     # place the barriers
+    barriers = []
     barrier_x = round(BARRIER_WIDTH * 1.5)
     barrier_y = player.y - player.h - BARRIER_HEIGHT
     for idx in range(4):
-        units.append(Barrier(barrier_x, barrier_y))
+        barriers.append(Barrier(barrier_x, barrier_y))
         barrier_x += BARRIER_WIDTH * 2
+
+    # place the vaders
+    vaders = [[None for _ in range(VADER_COLUMNS)] for _ in range(VADER_ROWS)]
+    y_pos = 8
+    for row in range(VADER_ROWS):
+        x_pos = 2
+        species = Squid if row < 1 else Crab if row < 3 else Octopus
+        for col in range(VADER_COLUMNS):
+            vader = species(x_pos, y_pos, speed=1)
+            vaders[row][col] = vader
+            x_pos += vader.w + 2
+        y_pos += vader.h + 1
 
     # loop where curr_key is the last character pressed or -1 on no input
     while (curr_key := stdscr.getch()) != Control.QUIT:
@@ -286,6 +342,13 @@ def game_loop(stdscr: Window) -> None:
         if delay > 0:
             time.sleep(delay)
         last_time = time.time()
+
+        # update the last 10
+        if not state.egged and curr_key != Control.NULL:
+            state.last10.append(curr_key)
+            if curr_key == Control.LKEY and state.last10 == KOMANDO:
+                state.credits += 10
+                state.egged = True
 
         # handle terminal resize events
         if curr_key == curses.KEY_RESIZE:
@@ -309,10 +372,10 @@ def game_loop(stdscr: Window) -> None:
             state.credits += 1
 
         # handle player actions
-        if curr_key == Control.FIRE:
+        if curr_key == Control.FIRE and state.bullet is None:
             state.bullet = player.fire()
             if state.bullet:
-                units.append(state.bullet)
+                state.bullet.render(stdscr)
         elif curr_key in STOP_INPUTS:
             player.speed = 0
         elif curr_key in LEFT_INPUTS:
@@ -322,50 +385,128 @@ def game_loop(stdscr: Window) -> None:
             player.speed = 1
             player.turn(Direction.EAST)
 
+        # update the player position
+        player.move(stdscr)
+        player.render(stdscr)
+
         # render HUD information
         draw_hud(stdscr, height, width, state)
 
         def _reap(unit: Renderable) -> bool:
             if isinstance(unit, Killable) and unit.is_dead():
                 if (time.time() - unit.time_of_death) > REAP_DELAY:
-                    return False
-            return True
+                    return True
+            return False
 
-        # reap anything that's died
-        units = [u for u in units if _reap(u)]
+        # handle the mystery ship
+        if state.frame == FRAMERATE * 15:
+            state.mystery = Mystery(1, 3, speed=1)
+            direction = choice([Direction.EAST] * 3 + [Direction.WEST])
+            if direction is Direction.WEST:
+                state.mystery.x = width - 1 - state.mystery.w
+            state.mystery.turn(direction)
 
-        # update the units on screen
-        for unit in units:
-            if isinstance(unit, Moveable):
-                unit.move(stdscr)
-            if state.bullet and unit is not player and unit is not state.bullet:
+        if state.mystery:
+            state.mystery.move(stdscr)
+            if state.mystery.is_dead() and state.mystery.reached_wall():
+                state.mystery = None
+            else:
+                state.mystery.render(stdscr)
+
+        # handle the vaders
+        flip = not state.frame % 15
+        no_turn = True
+        # by default search west to east
+        columns = range(VADER_COLUMNS)
+        # reverse the search if the gestalt is moving east
+        if Gestalt.hive_direction is Direction.EAST:
+            columns = range(VADER_COLUMNS - 1, -1, -1)
+        for col in columns:
+            # always search up from the player's position
+            for row in range(VADER_ROWS - 1, -1, -1):
+                vader = vaders[row][col]
+                if vader is None:
+                    continue
+
+                if flip:
+                    if no_turn:
+                        # we might already be heading south
+                        if vader.has_turned():
+                            vader.wheel()
+                        elif vader.direction is Direction.WEST:
+                            if vader.x <= 6:
+                                vader.direction = Direction.SOUTH
+                        elif vader.direction is Direction.EAST:
+                            if vader.x + vader.w >= width - 6:
+                                vader.direction = Direction.SOUTH
+                        no_turn = False
+
+                    if vader.icon == vader.ICON:
+                        vader.icon = vader.ALT
+                    else:
+                        vader.icon = vader.ICON
+
+        for col in columns:
+            for row in range(VADER_ROWS - 1, -1, -1):
+                vader = vaders[row][col]
+                if vader is None:
+                    continue
+
+                if flip:
+                    vader.move(stdscr)
+                vader.render(stdscr)
+
+        if flip:
+            Sound.INVADER_4.play()
+
+        struck = None
+
+        # update the barriers on screen
+        for idx, barrier in enumerate(barriers):
+
+            # if the bullet could hit a barrier, check for an impact
+            if struck is None and state.bullet:
                 if (
-                    (state.bullet.x + state.bullet.w > unit.x)
-                    and (state.bullet.x < unit.x + unit.w)
-                    and (state.bullet.y + state.bullet.h >= unit.y)
-                    and (state.bullet.y <= unit.y + unit.h)
+                    (state.bullet.x + state.bullet.w > barrier.x)
+                    and (state.bullet.x < barrier.x + barrier.w)
+                    and (
+                        state.bullet.y + state.bullet.h - state.bullet.speed
+                        >= barrier.y
+                    )
+                    and (state.bullet.y - state.bullet.speed <= barrier.y + barrier.h)
                 ):
-                    if isinstance(unit, Barrier):
-                        icon = [list(r) for r in unit.icon.splitlines()]
-                        hit_x = state.bullet.x - unit.x
-                        hit_y = state.bullet.y - unit.y
-                        while hit_y >= 0 and icon[hit_y][hit_x] == " ":
-                            hit_y -= 1
-                        if hit_y < 0:
-                            continue
-                        icon[hit_y][hit_x] = " "
-                        unit.icon = "\n".join("".join(i) for i in icon)
-                        state.bullet.die()
-                        state.bullet = None
+                    struck = idx
+            # render the barrier
+            barrier.render(stdscr)
 
-        if state.bullet is None and not Bullet.in_flight():
-            units = [u for u in units if not isinstance(u, Bullet)]
+        if struck is not None:
+            barrier = barriers[struck]
+            icon = [list(r) for r in barrier.icon.splitlines()]
+            hit_x = state.bullet.x - barrier.x
+            damaged = False
+            for hit_y in range(barrier.h - 1, -1, -1):
+                if icon[hit_y][hit_x] != " ":
+                    icon[hit_y][hit_x] = " "
+                    damaged = True
+                    break
+            if damaged:
+                barrier.icon = "\n".join("".join(i) for i in icon)
+                state.bullet.die()
+                state.bullet = None
+            # render the barrier
+            barrier.render(stdscr)
 
-        for unit in units:
-            unit.render(stdscr)
+        # render the bullet, if any
+        if state.bullet:
+            if _reap(state.bullet):
+                state.bullet = None
+            else:
+                state.bullet.move(stdscr)
+                state.bullet.render(stdscr)
 
         # refresh the screen
         stdscr.refresh()
+        state.frame += 1
 
 
 def main() -> None:

@@ -40,6 +40,7 @@ class Control(IntFlag):
     RARR = curses.KEY_RIGHT
     RKEY = ord("d")
     FIRE = curses.ascii.SP
+    BKEY = ord("b")
 
 
 class Direction(IntFlag):

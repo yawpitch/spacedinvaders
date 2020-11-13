@@ -8,6 +8,7 @@ import curses
 import locale
 import time
 from curses import window
+from random import choice
 from typing import ByteString, List, Optional
 
 # local imports
@@ -16,7 +17,6 @@ from spacedinvaders.utils import regularize, colorize
 from spacedinvaders.sounds import Sound
 
 CODEC = locale.getpreferredencoding()
-WALL_BUFFER = 5
 BULLET_IN_FLIGHT = False
 
 Icon = str
@@ -214,6 +214,8 @@ class Moveable:
     Mixin to allow a Renderable to be moved.
     """
 
+    WALL_BUFFER = 5
+
     def __init__(self, *args, speed: int = 1):
         super().__init__(*args)
         self._direction = Direction.EAST
@@ -240,11 +242,18 @@ class Moveable:
         """
         return self._direction
 
+    @direction.setter
+    def direction(self, val: Direction):
+        """
+        Updates the direction in which the unit is moving.
+        """
+        self._direction = val
+
     def turn(self, direction: Direction) -> Direction:
         """
         Turns the unit, returning its original direction.
         """
-        self._direction = direction
+        self.direction = direction
 
     def move(self, stdscr: Window) -> None:
         """
@@ -254,7 +263,7 @@ class Moveable:
 
         if self.direction is Direction.NORTH:
             new_y = self.y - self.speed
-            if new_y > WALL_BUFFER:
+            if new_y > self.WALL_BUFFER:
                 self.y = new_y
             else:
                 self.y = self.wall(new_y, 0)
@@ -262,7 +271,7 @@ class Moveable:
 
         if self.direction is Direction.WEST:
             new_x = self.x - self.speed
-            if new_x > WALL_BUFFER:
+            if new_x > self.WALL_BUFFER:
                 self.x = new_x
             else:
                 self.x = self.wall(new_x, 0)
@@ -272,7 +281,7 @@ class Moveable:
 
         if self.direction is Direction.SOUTH:
             new_y = self.y + self.speed
-            if new_y + self.h < height - WALL_BUFFER:
+            if new_y + self.h < height - self.WALL_BUFFER:
                 self.y = new_y
             else:
                 self.y = self.wall(new_y, height)
@@ -280,7 +289,7 @@ class Moveable:
 
         if self.direction is Direction.EAST:
             new_x = self.x + self.speed
-            if new_x + self.w < width - WALL_BUFFER:
+            if new_x + self.w < width - self.WALL_BUFFER:
                 self.x = new_x
             else:
                 self.x = self.wall(new_x, width)
@@ -291,6 +300,83 @@ class Moveable:
         Handle wall impact in the direction just moved.
         """
         raise NotImplementedError("Subclass must implement")
+
+
+class Gestalt(Moveable):
+    """
+    Moveables that act as one.
+    """
+
+    # WALL_BUFFER = 10
+
+    hive_direction = Direction.EAST
+    _hive_next_direction = Direction.WEST
+    _hive_speed = 1
+    _hive_turned = False
+
+    @property
+    def speed(self) -> int:
+        """
+        The speed at which the unit is moving.
+        """
+        return Gestalt._hive_speed
+
+    @speed.setter
+    def speed(self, val: int):
+        """
+        Updates the speed the unit is moving.
+        """
+        Gestalt._hive_speed = val
+
+    @property
+    def direction(self) -> Direction:
+        """
+        The direction in which the unit is moving.
+        """
+        return Gestalt.hive_direction
+
+    @direction.setter
+    def direction(self, val: Direction):
+        """
+        Updates the direction in which the unit is moving.
+        """
+        assert val is not Direction.NORTH
+        Gestalt._hive_turned = False
+        if val is Direction.WEST:
+            Gestalt._hive_next_direction = Direction.EAST
+        elif val is Direction.EAST:
+            Gestalt._hive_next_direction = Direction.WEST
+        else:
+            Gestalt._hive_turned = True
+        Gestalt.hive_direction = val
+
+    def has_turned(self) -> bool:
+        """
+        Check if the Gestalt has recently turned South.
+        """
+        return Gestalt._hive_turned
+
+    def wheel(self) -> None:
+        """
+        Wheel the Gestalt back in the direction it came from.
+        """
+        if self.has_turned:
+            self.turn(self._hive_next_direction)
+
+    def wall(self, new_position: int, limit: int) -> int:
+        """
+        Stop on wall impact. When we turn one, we turn all (we
+        sayeth with more than a little irony).
+        """
+        assert self.direction is not Direction.NORTH
+
+        if self.direction is Direction.WEST:
+            self.turn(Direction.SOUTH)
+
+        if self.direction is Direction.EAST:
+            self.turn(Direction.SOUTH)
+
+        return new_position
 
 
 class Bullet(Moveable, Killable, Renderable):
@@ -391,7 +477,7 @@ class Player(Moveable, Killable, Renderable):
         """
         if not Bullet.in_flight():
             Sound.SHOOT.play()
-            return Bullet((self.x + (self.x + self.w)) // 2, self.y - 1, speed = 3)
+            return Bullet((self.x + (self.x + self.w)) // 2, self.y - 1, speed=3)
         return None
 
     def die(self) -> None:
@@ -403,7 +489,7 @@ class Player(Moveable, Killable, Renderable):
         super().die()
 
 
-class Squid(Moveable, Killable, Renderable):
+class Squid(Gestalt, Killable, Renderable):
     """
     The Squid Invader.
     """
@@ -414,14 +500,13 @@ class Squid(Moveable, Killable, Renderable):
     ICON: Icon = make_icon(
         """
         ▗▆▖
-        ▚┳▞
+        ▚╿▞
         """
     )
     ALT: Icon = make_icon(
         """
         ▗▆▖
-        ▞┳▚
-
+        ▞╽▚
         """
     )
     DEATH: Icon = make_icon(
@@ -431,7 +516,7 @@ class Squid(Moveable, Killable, Renderable):
     )
 
 
-class Crab(Moveable, Killable, Renderable):
+class Crab(Gestalt, Killable, Renderable):
     """
     The Crab Invader.
     """
@@ -442,13 +527,13 @@ class Crab(Moveable, Killable, Renderable):
     ICON: Icon = make_icon(
         """
         ▙▀▟
-        ▘▔▝
+        ▝▔▘
         """
     )
     ALT: Icon = make_icon(
         """
-        ▛▆▜
-        ▔┻▔
+        ▙▀▟
+        ▘▔▝
         """
     )
     DEATH: Icon = make_icon(
@@ -458,7 +543,7 @@ class Crab(Moveable, Killable, Renderable):
     )
 
 
-class Octopus(Moveable, Killable, Renderable):
+class Octopus(Gestalt, Killable, Renderable):
     """
     The Octopus Invader.
     """
@@ -502,6 +587,50 @@ class Mystery(Moveable, Killable, Renderable):
         ⟫╳⟪
         """
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._reached_wall = False
+        self._sound = Sound.MYSTERY.play()
+
+    def reached_wall(self) -> bool:
+        """
+        Check if the ship reached the wall unscathed.
+        """
+        return self._reached_wall
+
+    def wall(self, new_position: int, limit: int) -> int:
+        """
+        Stop on wall impact. Mystery ship only travels east/west.
+        """
+        assert self.direction is not Direction.NORTH
+        assert self.direction is not Direction.SOUTH
+
+        if self.direction is Direction.WEST:
+            if new_position < limit + 1:
+                self._reached_wall = True
+                self.speed = 0
+                self.die()
+                return limit + 1
+
+        if self.direction is Direction.EAST:
+            if new_position + self.w < limit - 1:
+                self._reached_wall = True
+                self.speed = 0
+                self.die()
+                return limit - self.w - 1
+
+        return new_position
+
+    def die(self):
+        """
+        Kill this Mystery ship.
+        """
+        if self._sound.is_playing():
+            self._sound.stop()
+        self.color = Color.GREEN
+        self.speed = 0
+        super().die()
 
 
 class Bomb(Moveable, Killable, Renderable):
@@ -618,6 +747,7 @@ __all__ = [
     "Bomb",
     "Bullet",
     "Crab",
+    "Gestalt",
     "Killable",
     "Moveable",
     "Mystery",

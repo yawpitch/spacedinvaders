@@ -46,3 +46,4 @@ class Sound:
     SHOOT = _load(_resource("media/shoot.wav"))
     UFO_HIGH = _load(_resource("media/ufo_highpitch.wav"))
     UFO_LOW = _load(_resource("media/ufo_lowpitch.wav"))
+    MYSTERY = _load(_resource("media/mystery.wav"))
