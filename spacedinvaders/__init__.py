@@ -459,46 +459,34 @@ def game_loop(stdscr: Window) -> None:
         if flip:
             Sound.INVADER_4.play()
 
-        struck = None
+        struck = []
 
         # update the barriers on screen
         for idx, barrier in enumerate(barriers):
 
             # if the bullet could hit a barrier, check for an impact
-            if struck is None and state.bullet:
-                if (
-                    (state.bullet.x + state.bullet.w > barrier.x)
-                    and (state.bullet.x < barrier.x + barrier.w)
-                    and (
-                        state.bullet.y + state.bullet.h - state.bullet.speed
-                        >= barrier.y
-                    )
-                    and (state.bullet.y - state.bullet.speed <= barrier.y + barrier.h)
-                ):
-                    struck = idx
-            # render the barrier
-            barrier.render(stdscr)
+            if state.bullet and barrier.impacted_by(state.bullet):
+                struck.insert(0, idx)
 
-        if struck is not None:
-            barrier = barriers[struck]
-            icon = [list(r) for r in barrier.icon.splitlines()]
-            hit_x = state.bullet.x - barrier.x
-            damaged = False
-            for hit_y in range(barrier.h - 1, -1, -1):
-                if icon[hit_y][hit_x] != " ":
-                    icon[hit_y][hit_x] = " "
-                    damaged = True
-                    break
-            if damaged:
-                barrier.icon = "\n".join("".join(i) for i in icon)
-                state.bullet.die()
-                state.bullet = None
-            # render the barrier
-            barrier.render(stdscr)
+            # render the barrier if it's had no collisions this round
+            if not barrier.struck:
+                barrier.render(stdscr)
+
+        for idx in struck:
+            barrier = barriers[idx]
+            barrier.degrade()
+            # the barrier may have been eliminated from play
+            if barrier.is_devastated():
+                barriers.pop(idx)
+            else:
+                # render the barrier
+                barrier.render(stdscr)
 
         # render the bullet, if any
         if state.bullet:
-            if _reap(state.bullet):
+            if state.bullet.impacted:
+                state.bullet = None
+            elif _reap(state.bullet):
                 state.bullet = None
             else:
                 state.bullet.move(stdscr)

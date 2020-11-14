@@ -3,13 +3,15 @@
 """
 A textual, terminal spin on an arcade classic.
 """
+from __future__ import annotations
+
 # stdlib imports
 import curses
 import locale
 import time
 from curses import window
 from random import choice
-from typing import ByteString, List, Optional
+from typing import ByteString, Dict, List, Optional, Set, Tuple
 
 # local imports
 from spacedinvaders.constants import Color, Direction
@@ -379,7 +381,216 @@ class Gestalt(Moveable):
         return new_position
 
 
-class Bullet(Moveable, Killable, Renderable):
+class Collidable:
+    """
+    Mixin to allow a Renderable to be collided with.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args)
+        self._struck: List[Collidable] = []
+        self._impacted = False
+
+    @property
+    def struck(self) -> bool:
+        """
+        Has the unit suffered a collision.
+        """
+        return bool(self._struck)
+
+    @property
+    def impacted(self) -> bool:
+        """
+        Has the unit impacted another in this round?
+        """
+        return self._impacted
+
+    @impacted.setter
+    def impacted(self, new_state: bool):
+        """
+        Update the impacted value for this unit.
+        """
+        self._impacted = new_state
+
+    @property
+    def cx(self):
+        """
+        The x coordinate of this unit's collision box.
+        """
+        if isinstance(self, Moveable):
+            if self.direction is Direction.EAST:
+                return self.x + self.speed
+            if self.direction is Direction.WEST:
+                return self.x - self.speed
+        return self.x
+
+    @property
+    def cy(self):
+        """
+        The y coordinate of this unit's collision box.
+        """
+        if isinstance(self, Moveable):
+            if self.direction is Direction.NORTH:
+                return self.y - self.speed
+            if self.direction is Direction.SOUTH:
+                return self.y + self.speed
+        return self.y
+
+    def collides_with(self, other: Collidable) -> bool:
+        """
+        Tests if this unit and some other will collide on next move.
+        """
+        return (
+            (other.cx + other.w > self.cx)
+            and (other.cx < self.cx + self.w)
+            and (other.cy + other.h > self.cy)
+            and (other.cy < self.cy + self.h)
+        )
+
+    def impacted_by(self, impactor: Collidable) -> bool:
+        """
+        Tests if the impactor has struck this unit.
+        """
+        if self.collides_with(impactor):
+            self._struck.append(impactor)
+            impactor.impacted = True
+            return True
+        return False
+
+
+class Destructible(Collidable):
+    """
+    Mixin for Renderable units that can be successively eroded by collisions.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args)
+        self._state: List[List[str]] = [list(r) for r in self.icon.splitlines()]
+        self._devastated: Dict[str, Set[int]] = {"rows": set(), "cols": set()}
+
+    def is_devastated(self) -> bool:
+        """
+        Check if the unit has been completely devastated.
+        """
+        return (
+            len(self._devastated["rows"]) == self.h
+            and len(self._devastated["cols"]) == self.w
+        )
+
+    def degrade(self) -> None:
+        """
+        Process any damage done by strikes.
+        """
+        damaged = False
+        while self._struck:
+            other = self._struck.pop(0)
+
+            # special case bullets, which fly fast but do not penetrate
+            if isinstance(other, Bullet):
+                assert other.direction is Direction.NORTH
+                hit_x = other.cx - self.cx
+                # don't bother processing devastated columns
+                if hit_x in self._devastated["cols"]:
+                    other.impacted = False
+                    continue
+                # process the first brick hit from the bottom
+                for hit_y in range(self.h - 1, -1, -1):
+                    if self._state[hit_y][hit_x] != " ":
+                        self._state[hit_y][hit_x] = " "
+                        damaged = True
+                        other.die()
+                        # we may have just devastated the column
+                        if hit_y == 0:
+                            self._devastated["cols"].add(hit_x)
+                        break
+                # no bricks hit, the column has been devastated
+                else:
+                    other.impacted = False
+                    self._devastated["cols"].add(hit_x)
+
+            # special case bombs, which fall slow or fast and may penetrate
+            elif isinstance(other, Bomb):
+                assert other.direction is Direction.SOUTH
+                penetration = 2 if isinstance(other, SuperBomb) else 1
+                hit_x = other.cx - self.cx
+                # don't bother processing devastated columns
+                if hit_x in self._devastated["cols"]:
+                    other.impacted = False
+                    continue
+                # process the first brick hit from the bottom
+                for hit_y in range(self.h + 1):
+                    if self._state[hit_y][hit_x] != " ":
+                        self._state[hit_y][hit_x] = " "
+                        damaged = True
+                        # we may have just devastated the column
+                        if hit_y == self.h:
+                            self._devastated["cols"].add(hit_x)
+                            other.die()
+                            break
+                        # we may have to consider penetration
+                        if penetration:
+                            penetration -= 1
+                            continue
+                        # otherwise we're done here
+                        other.die()
+                        break
+
+                # no bricks hit, the column has been devastated
+                else:
+                    other.impacted = False
+                    self._devastated["cols"].add(hit_x)
+
+            # the only other thing to worry about is invaders wiping the unit
+            else:
+                cols_damaged, rows_damaged = set(), set()
+                for y_idx in range(other.cy, other.cy + other.h + 1):
+                    # ignore devastated and non-overlapping rows
+                    if (
+                        y_idx in self._devastated["rows"]
+                        or y_idx > self.cy + self.h
+                        or y_ix < self.cy
+                    ):
+                        continue
+                    for x_idx in range(other.cx, other.cx + other.w + 1):
+                        # ignore devastated and non-overlapping colums
+                        if (
+                            x_idx in self._devastated["cols"]
+                            or x_idx > self.xw
+                            or x_idx < self.cx
+                        ):
+                            continue
+                        hit_y = other.cy - self.cy
+                        hit_x = other.cx - self.cx
+                        if self._state[hit_y][hit_x] != " ":
+                            self._state[hit_y][hit_x] = " "
+                            rows_damaged.add(hit_y)
+                            cols_damaged.add(hit_x)
+                            damaged = True
+
+                # check for devastation
+                for row_idx in rows_damaged:
+                    for col_idx in range(self.cx, self.cx + self.w + 1):
+                        if col_idx in self._devastated["cols"]:
+                            continue
+                        if self._state[row_idx][col_idx] != " ":
+                            break
+                    else:
+                        self._devastated["rows"].add(row_idx)
+
+                for col_idx in cols_damaged:
+                    for row_idx in range(self.cy, self.cy + self.h + 1):
+                        if row_idx in self._devastated["rows"]:
+                            continue
+                        if self._state[row_idx][col_idx] != " ":
+                            break
+                    else:
+                        self._devastated["rows"].add(row_idx)
+
+        if damaged:
+            self.icon = "\n".join("".join(i) for i in self._state)
+
+
+class Bullet(Moveable, Collidable, Killable, Renderable):
     """
     A player's shot at glory.
     """
@@ -489,7 +700,7 @@ class Player(Moveable, Killable, Renderable):
         super().die()
 
 
-class Squid(Gestalt, Killable, Renderable):
+class Squid(Gestalt, Collidable, Killable, Renderable):
     """
     The Squid Invader.
     """
@@ -516,7 +727,7 @@ class Squid(Gestalt, Killable, Renderable):
     )
 
 
-class Crab(Gestalt, Killable, Renderable):
+class Crab(Gestalt, Collidable, Killable, Renderable):
     """
     The Crab Invader.
     """
@@ -543,7 +754,7 @@ class Crab(Gestalt, Killable, Renderable):
     )
 
 
-class Octopus(Gestalt, Killable, Renderable):
+class Octopus(Gestalt, Collidable, Killable, Renderable):
     """
     The Octopus Invader.
     """
@@ -570,7 +781,7 @@ class Octopus(Gestalt, Killable, Renderable):
     )
 
 
-class Mystery(Moveable, Killable, Renderable):
+class Mystery(Moveable, Collidable, Killable, Renderable):
     """
     The Mystery Ship.
     """
@@ -633,7 +844,7 @@ class Mystery(Moveable, Killable, Renderable):
         super().die()
 
 
-class Bomb(Moveable, Killable, Renderable):
+class Bomb(Moveable, Collidable, Killable, Renderable):
     """
     The Invader's main weapon.
     """
@@ -641,17 +852,17 @@ class Bomb(Moveable, Killable, Renderable):
     COLOR: Color = Color.CYAN
     ICON: Icon = make_icon(
         """
-        ⧘
+        ╿
         """
     )
     ALT: Icon = make_icon(
         """
-        ⧙
+        ╽
         """
     )
     DEATH: Optional[Icon] = make_icon(
         """
-        ✸✺✸
+        ✸
         """
     )
 
@@ -689,7 +900,7 @@ class Bomb(Moveable, Killable, Renderable):
         return cls._IN_FLIGHT
 
 
-class SuperBomb(Moveable, Killable, Renderable):
+class SuperBomb(Bomb):
     """
     The Invader's alt weapon.
     """
@@ -697,17 +908,17 @@ class SuperBomb(Moveable, Killable, Renderable):
     COLOR: Color = Color.MAGENTA
     ICON: Icon = make_icon(
         """
-        ⧚
+        ⧘
         """
     )
     ALT: Icon = make_icon(
         """
-        ⧛
+        ⧙
         """
     )
     DEATH: Optional[Icon] = make_icon(
         """
-        ✸✺✸
+        ✺
         """
     )
 
@@ -725,7 +936,7 @@ class SuperBomb(Moveable, Killable, Renderable):
             super().die()
 
 
-class Barrier(Renderable):
+class Barrier(Destructible, Renderable):
     """
     The last line of defense between the Player and the Invaders.
     """
