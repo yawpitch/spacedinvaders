@@ -10,6 +10,7 @@ import curses
 import locale
 import time
 from curses import window
+from random import choice
 from typing import ByteString, Dict, List, Optional, Set, Tuple
 
 # local imports
@@ -168,6 +169,25 @@ class Renderable:
         self._dirty = False
 
 
+class Reskinable:
+    """
+    Mixin that allows a unit to be reskinned on move.
+    """
+
+    ALT: Icon
+
+    def flip(self) -> None:
+        """
+        Flips the unit's icon.
+        """
+        if hasattr(self, "is_dead") and self.is_dead():
+            return None
+        if self.icon is self.ICON:
+            self.icon = self.ALT
+        else:
+            self.icon = self.ICON
+
+
 class Killable:
     """
     Mixin to allow a Renderable to be killed.
@@ -277,31 +297,30 @@ class Moveable:
                 self.y = new_y
             else:
                 self.y = self.wall(new_y, 0)
-            return
 
-        if self.direction is Direction.WEST:
+        elif self.direction is Direction.WEST:
             new_x = self.x - self.speed
             if new_x > self.WALL_BUFFER:
                 self.x = new_x
             else:
                 self.x = self.wall(new_x, 0)
-            return
 
-        if self.direction is Direction.SOUTH:
+        elif self.direction is Direction.SOUTH:
             new_y = self.y + self.speed
             if new_y + self.h < height - self.WALL_BUFFER:
                 self.y = new_y
             else:
                 self.y = self.wall(new_y, height)
-            return
 
-        if self.direction is Direction.EAST:
+        else:
             new_x = self.x + self.speed
             if new_x + self.w < width - self.WALL_BUFFER:
                 self.x = new_x
             else:
                 self.x = self.wall(new_x, width)
-            return
+
+        if isinstance(self, Reskinable):
+            self.flip()
 
     def wall(self, new_position: int, limit: int) -> int:
         """
@@ -315,15 +334,17 @@ class Gestalt(Moveable):
     Moveables that act as one.
     """
 
-    COLUMNS = 11
-    ROWS = 5
-    TURN_BUFFER = 8
-    hive_members = [[] for _ in range(COLUMNS)]
-    hive_moves = 0
-    hive_direction = Direction.EAST
-    hive_aboutface = Direction.WEST
-    hive_speed = 1
-    hive_turned = False
+    WALL_BUFFER: int = 1
+    TURN_BUFFER: int = 4
+    COLUMNS: int = 11
+    ROWS: int = 5
+    hive_members: List[List[Invader]] = [[] for _ in range(COLUMNS)]
+    hive_moves: int = 0
+    hive_direction: Direction = Direction.EAST
+    hive_aboutface: Direction = Direction.WEST
+    hive_speed: int = 1
+    hive_turned: bool = False
+    hive_dropped: List[Bomb] = []
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -367,12 +388,10 @@ class Gestalt(Moveable):
     @classmethod
     def on_every(cls, frame: int) -> bool:
         """
-        Speed up as invaders get kill.
+        Speed up as invaders get killed.
         """
-        flip = frame % 15 == 0
-        # if flip:
-        #   Sound.INVADER_4.play()
-        return flip
+        remaining = sum(len(col) for col in cls.hive_members)
+        return frame % max(1, remaining) == 0
 
     @property
     def direction(self) -> Direction:
@@ -397,17 +416,22 @@ class Gestalt(Moveable):
         Gestalt.hive_direction = new
 
     @classmethod
-    def last_man(cls) -> Optional[Gestalt]:
+    def remaining(cls) -> int:
         """
-        As long as one invader remains, return it.
+        The number of remaining invaders.
         """
-        try:
-            return cls.hive_members[0][0]
-        except IndexError:
-            return None
+        return sum(len(c) for c in cls.hive_members)
 
     @classmethod
-    def lockstep(cls, stdscr: Window, frame: int, width: int, height: int) -> None:
+    def lockstep(
+        cls,
+        stdscr: Window,
+        frame: int,
+        width: int,
+        height: int,
+        player_x: int,
+        player_score: int,
+    ) -> None:
         """
         Move as one. Fight as one. Die as one?
         """
@@ -424,12 +448,39 @@ class Gestalt(Moveable):
         columns = range(len(members))
         # reverse the search if the gestalt is moving east
         if cls.hive_direction is Direction.EAST:
-            columns = reversed(columns)
+            columns = sorted(columns, reverse=True)
+
+        count = cls.remaining()
+
+        bomb = sight = None
+        # load a weapon, if we can fire
+        if cls.can_drop(player_score):
+            arsenal = [Seeker]
+            if not any(isinstance(b, SuperBomb) for b in cls.hive_dropped):
+                arsenal.append(SuperBomb)
+            if count > 8:
+                arsenal.append(Bomb)
+            bomb = choice(arsenal)
+
+            # if the bomb is a Seeker we need to drop it from the column
+            # nearest the player's current x position
+            if isinstance(bomb, Seeker):
+                sight = min(
+                    columns,
+                    key=lambda i: abs(
+                        ((members[i][0].x + members[i][0]) // 2) - player_x
+                    ),
+                )
+            else:
+                sight = choice(columns)
 
         for col in columns:
             column = members[col]
+            if not column:
+                continue
             # always search up from the player's position
-            for row in reversed(range(len(column))):
+            for idx, row in enumerate(reversed(range(len(column)))):
+
                 member = column[row]
                 if no_turn:
                     if cls.hive_direction is Direction.WEST:
@@ -442,12 +493,20 @@ class Gestalt(Moveable):
                         member.direction = cls.hive_aboutface
                     no_turn = False
 
-                if member.icon == member.ICON:
-                    member.icon = member.ALT
-                else:
-                    member.icon = member.ICON
-
                 member.move(stdscr, frame, width, height)
+
+                # drop the bomb from the bottommost member
+                if col == sight and idx == 0:
+                    away = bomb(
+                        (member.x + member.x + member.w) // 2,
+                        member.y + 2,
+                        speed=2 if count == 1 else 1,
+                    )
+                    away.render(stdscr)
+                    cls.hive_dropped.insert(0, away)
+
+        Sound.INVADER_4.play()
+        cls.hive_moves += 1
 
     def wall(self, new_position: int, limit: int) -> int:
         """
@@ -478,6 +537,29 @@ class Gestalt(Moveable):
                     return column.pop(-1)
 
         return None
+
+    @classmethod
+    def can_drop(cls, score: int) -> bool:
+        """
+        Check if a Bomb can be dropped.
+        """
+        if not cls.hive_dropped:
+            return True
+        # all these rates from the amazing work at:
+        # https://www.computerarcheology.com/Arcade/SpaceInvaders/
+        # though we have to massage them a bit for reasonable
+        # play on curses
+        if score < 200:
+            delay = 48
+        elif score < 1000:
+            delay = 16
+        elif score < 2000:
+            delay = 11
+        elif score < 3000:
+            delay = 8
+        else:
+            delay = 7
+        return cls.hive_dropped[0].in_flight % 60 > delay * 10
 
 
 class Collidable:
@@ -610,14 +692,14 @@ class Destructible(Collidable):
             # special case bombs, which fall slow or fast and may penetrate
             elif isinstance(other, Bomb):
                 assert other.direction is Direction.SOUTH
-                penetration = 2 if isinstance(other, SuperBomb) else 1
+                penetration = 1 if isinstance(other, SuperBomb) else 0
                 hit_x = other.cx - self.cx
                 # don't bother processing devastated columns
                 if hit_x in self._devastated["cols"]:
                     other.impacted = False
                     continue
                 # process the first brick hit from the bottom
-                for hit_y in range(self.h + 1):
+                for hit_y in range(self.h):
                     if self._state[hit_y][hit_x] != " ":
                         self._state[hit_y][hit_x] = " "
                         damaged = True
@@ -787,7 +869,15 @@ class Collectible:
         return self.POINTS
 
 
-class Squid(Gestalt, Collidable, Killable, Collectible, Renderable):
+class Alien(Moveable, Collidable, Killable, Collectible, Renderable):
+    ...
+
+
+class Invader(Gestalt, Reskinable, Alien):
+    ...
+
+
+class Squid(Invader):
     """
     The Squid Invader.
     """
@@ -814,7 +904,7 @@ class Squid(Gestalt, Collidable, Killable, Collectible, Renderable):
     )
 
 
-class Crab(Gestalt, Collidable, Killable, Collectible, Renderable):
+class Crab(Invader):
     """
     The Crab Invader.
     """
@@ -841,7 +931,7 @@ class Crab(Gestalt, Collidable, Killable, Collectible, Renderable):
     )
 
 
-class Octopus(Gestalt, Collidable, Killable, Collectible, Renderable):
+class Octopus(Invader):
     """
     The Octopus Invader.
     """
@@ -868,7 +958,7 @@ class Octopus(Gestalt, Collidable, Killable, Collectible, Renderable):
     )
 
 
-class Mystery(Moveable, Collidable, Killable, Collectible, Renderable):
+class Mystery(Alien):
     """
     The Mystery Ship.
     """
@@ -957,7 +1047,45 @@ class Mystery(Moveable, Collidable, Killable, Collectible, Renderable):
         return mystery
 
 
-class Bomb(Moveable, Collidable, Killable, Renderable):
+class Droppable(Moveable, Collidable, Killable, Reskinable, Renderable):
+    """
+    Any object in the alien arsenal.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.direction = Direction.SOUTH
+        self.in_flight = 0
+
+    def on_every(self, frame: int) -> bool:
+        """
+        Retard the bombs a little.
+        """
+        return frame % 3 == 0
+
+    def move(self, stdscr: Window, frame: int, width: int, height: int) -> None:
+        super().move(stdscr, frame, width, height)
+        self.in_flight += 1
+
+    def wall(self, new_position: int, limit: int) -> int:
+        """
+        Stop on wall impact. Bombs only travel south.
+        """
+        assert self.direction is Direction.SOUTH
+        if new_position > limit - 3:
+            self.die()
+        return min([new_position, limit - 3])
+
+    def die(self):
+        """
+        Kill this bomb.
+        """
+        self.color = Color.RED
+        self.speed = 0
+        super().die()
+
+
+class Bomb(Droppable):
     """
     The Invader's main weapon.
     """
@@ -979,31 +1107,27 @@ class Bomb(Moveable, Collidable, Killable, Renderable):
         """
     )
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._direction = Direction.SOUTH
 
-    def wall(self, new_position: int, limit: int) -> int:
-        """
-        Stop on wall impact. Bombs only travel south.
-        """
-        assert self.direction is Direction.SOUTH
-        if new_position > limit - 2:
-            self.die()
-        return min([new_position, limit - 2])
+class Seeker(Bomb):
+    """
+    A bomb that starts above the Player's position.
+    """
 
-    def die(self):
+    ICON: Icon = make_icon(
         """
-        Kill this bomb.
+        ⎬
         """
-        self.color = Color.GREEN
-        self.speed = 0
-        super().die()
+    )
+    ALT: Icon = make_icon(
+        """
+        ⎨
+        """
+    )
 
 
 class SuperBomb(Bomb):
     """
-    The Invader's alt weapon.
+    The Invader's most powerful  weapon.
     """
 
     COLOR: Color = Color.MAGENTA
@@ -1031,7 +1155,7 @@ class SuperBomb(Bomb):
         """
         Kill this bomb.
         """
-        if self_hitpoints:
+        if self._hitpoints:
             self._hitpoints -= 1
         else:
             super().die()

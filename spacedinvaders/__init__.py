@@ -450,7 +450,7 @@ def game_loop(stdscr: Window) -> None:
             state.mystery.render(stdscr)
 
         # handle the invaders
-        Gestalt.lockstep(stdscr, state.frame, width, height)
+        Gestalt.lockstep(stdscr, state.frame, width, height, player.x, state.score)
 
         # handle succesful player shots
         has_kill = Gestalt.find_collision(state.bullet) if state.bullet else None
@@ -480,6 +480,13 @@ def game_loop(stdscr: Window) -> None:
                         struck.add(idx)
                         break
 
+            for bomb in Gestalt.hive_dropped:
+                if bomb.y + bomb.h < barrier.y:
+                    continue
+                if barrier.impacted_by(bomb):
+                    struck.add(idx)
+                    break
+
             # render the barrier if it's had no collisions this round
             if not barrier.struck:
                 barrier.render(stdscr)
@@ -494,6 +501,16 @@ def game_loop(stdscr: Window) -> None:
                 # render the barrier
                 barrier.render(stdscr)
 
+        # reap any killed bombs
+        bombs = Gestalt.hive_dropped
+        while bombs and (bombs[-1].impacted or _reap(bombs[-1])):
+            bombs.pop()
+
+        # render any remaining bombs
+        for bomb in bombs:
+            bomb.move(stdscr, state.frame, width, height)
+            bomb.render(stdscr)
+
         # render the bullet, if any
         if state.bullet:
             if state.bullet.impacted:
@@ -504,7 +521,7 @@ def game_loop(stdscr: Window) -> None:
                 state.bullet.move(stdscr, state.frame, width, height)
                 state.bullet.render(stdscr)
 
-	# update the gestalt, so they cover the barriers if wiping
+        # update the gestalt, so they cover the barriers if wiping
         Gestalt.render_all(stdscr)
 
         # refresh the screen
