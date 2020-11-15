@@ -10,7 +10,6 @@ import curses
 import locale
 import time
 from curses import window
-from random import choice
 from typing import ByteString, Dict, List, Optional, Set, Tuple
 
 # local imports
@@ -19,7 +18,6 @@ from spacedinvaders.utils import regularize, colorize
 from spacedinvaders.sounds import Sound
 
 CODEC = locale.getpreferredencoding()
-BULLET_IN_FLIGHT = False
 
 Icon = str
 Window = curses.window
@@ -237,6 +235,13 @@ class Moveable:
         """
         self._speed = val
 
+    def on_every(self, frame: int) -> bool:
+        """
+        Used to limit on what frames movement will occur.
+        Subclasses can use this to slow movement, or perform periodic actions.
+        """
+        return True
+
     @property
     def direction(self) -> Direction:
         """
@@ -257,11 +262,14 @@ class Moveable:
         """
         self.direction = direction
 
-    def move(self, stdscr: Window) -> None:
+    def move(self, stdscr: Window, frame: int, width: int, height: int) -> None:
         """
         Moves the unit in the direction it's facing.
         Calls Moveable.wall(new_position, limit) near wall collisions.
         """
+        # only move on every scheduled frame
+        if not self.on_every(frame):
+            return None
 
         if self.direction is Direction.NORTH:
             new_y = self.y - self.speed
@@ -278,8 +286,6 @@ class Moveable:
             else:
                 self.x = self.wall(new_x, 0)
             return
-
-        height, width = stdscr.getmaxyx()
 
         if self.direction is Direction.SOUTH:
             new_y = self.y + self.speed
@@ -309,26 +315,64 @@ class Gestalt(Moveable):
     Moveables that act as one.
     """
 
-    # WALL_BUFFER = 10
-
+    COLUMNS = 11
+    ROWS = 5
+    TURN_BUFFER = 8
+    hive_members = [[] for _ in range(COLUMNS)]
+    hive_moves = 0
     hive_direction = Direction.EAST
-    _hive_next_direction = Direction.WEST
-    _hive_speed = 1
-    _hive_turned = False
+    hive_aboutface = Direction.WEST
+    hive_speed = 1
+    hive_turned = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        row, col = divmod(sum(len(l) for l in Gestalt.hive_members), Gestalt.COLUMNS)
+        assert (row, col) != (Gestalt.ROWS, 1)
+        Gestalt.hive_members[col].append(self)
+
+    @classmethod
+    def populate(cls, x: int, y: int, *, x_sep: int = 2, y_sep: int = 1) -> None:
+        """
+        Populate the Gestalt.
+        """
+        # clear any existing hive
+        for col in Gestalt.hive_members:
+            col.clear()
+
+        # place the invaders
+        y_pos = y
+        for row in range(Gestalt.ROWS):
+            x_pos = x
+            species = Squid if row < 1 else Crab if row < 3 else Octopus
+            for col in range(cls.COLUMNS):
+                vader = species(x_pos, y_pos, speed=1)
+                x_pos += vader.w + x_sep
+            y_pos += vader.h + y_sep
 
     @property
     def speed(self) -> int:
         """
         The speed at which the unit is moving.
         """
-        return Gestalt._hive_speed
+        return Gestalt.hive_speed
 
     @speed.setter
     def speed(self, val: int):
         """
         Updates the speed the unit is moving.
         """
-        Gestalt._hive_speed = val
+        Gestalt.hive_speed = val
+
+    @classmethod
+    def on_every(cls, frame: int) -> bool:
+        """
+        Speed up as invaders get kill.
+        """
+        flip = frame % 15 == 0
+        # if flip:
+        #   Sound.INVADER_4.play()
+        return flip
 
     @property
     def direction(self) -> Direction:
@@ -338,47 +382,86 @@ class Gestalt(Moveable):
         return Gestalt.hive_direction
 
     @direction.setter
-    def direction(self, val: Direction):
+    def direction(self, new: Direction):
         """
         Updates the direction in which the unit is moving.
         """
-        assert val is not Direction.NORTH
-        Gestalt._hive_turned = False
-        if val is Direction.WEST:
-            Gestalt._hive_next_direction = Direction.EAST
-        elif val is Direction.EAST:
-            Gestalt._hive_next_direction = Direction.WEST
+        assert new is not Direction.NORTH
+        Gestalt.hive_turned = False
+        if new is Direction.WEST:
+            Gestalt.hive_aboutface = Direction.EAST
+        elif new is Direction.EAST:
+            Gestalt.hive_aboutface = Direction.WEST
         else:
-            Gestalt._hive_turned = True
-        Gestalt.hive_direction = val
+            Gestalt.hive_turned = True
+        Gestalt.hive_direction = new
 
-    def has_turned(self) -> bool:
+    @classmethod
+    def last_man(cls) -> Optional[Gestalt]:
         """
-        Check if the Gestalt has recently turned South.
+        As long as one invader remains, return it.
         """
-        return Gestalt._hive_turned
+        try:
+            return cls.hive_members[0][0]
+        except IndexError:
+            return None
 
-    def wheel(self) -> None:
+    @classmethod
+    def lockstep(cls, stdscr: Window, frame: int, width: int, height: int) -> None:
         """
-        Wheel the Gestalt back in the direction it came from.
+        Move as one. Fight as one. Die as one?
         """
-        if self.has_turned:
-            self.turn(self._hive_next_direction)
+        assert cls.hive_direction is not Direction.NORTH
+
+        flip = cls.on_every(frame)
+        if not flip:
+            return None
+
+        members = Gestalt.hive_members
+
+        no_turn = True
+        # by default search west to east
+        columns = range(len(members))
+        # reverse the search if the gestalt is moving east
+        if cls.hive_direction is Direction.EAST:
+            columns = reversed(columns)
+
+        for col in columns:
+            column = members[col]
+            # always search up from the player's position
+            for row in reversed(range(len(column))):
+                member = column[row]
+                if no_turn:
+                    if cls.hive_direction is Direction.WEST:
+                        if member.x <= cls.TURN_BUFFER:
+                            member.direction = Direction.SOUTH
+                    elif cls.hive_direction is Direction.EAST:
+                        if member.x + member.w >= width - cls.TURN_BUFFER:
+                            member.direction = Direction.SOUTH
+                    else:
+                        member.direction = cls.hive_aboutface
+                    no_turn = False
+
+                if member.icon == member.ICON:
+                    member.icon = member.ALT
+                else:
+                    member.icon = member.ICON
+
+                member.move(stdscr, frame, width, height)
 
     def wall(self, new_position: int, limit: int) -> int:
         """
-        Stop on wall impact. When we turn one, we turn all (we
+        Handle wall impact. When we turn one, we turn all (we
         sayeth with more than a little irony).
         """
-        assert self.direction is not Direction.NORTH
+        raise RuntimeError(f"{self} -> {new_position} @ {limit}")
 
-        if self.direction is Direction.WEST:
-            self.turn(Direction.SOUTH)
-
-        if self.direction is Direction.EAST:
-            self.turn(Direction.SOUTH)
-
-        return new_position
+    @classmethod
+    def render_all(cls, stdscr: Window) -> None:
+        """
+        Render the hive.
+        """
+        [[v.render(stdscr) for v in col] for col in cls.hive_members]
 
 
 class Collidable:
@@ -417,7 +500,7 @@ class Collidable:
         """
         The x coordinate of this unit's collision box.
         """
-        if isinstance(self, Moveable):
+        if hasattr(self, "speed"):
             if self.direction is Direction.EAST:
                 return self.x + self.speed
             if self.direction is Direction.WEST:
@@ -429,7 +512,7 @@ class Collidable:
         """
         The y coordinate of this unit's collision box.
         """
-        if isinstance(self, Moveable):
+        if hasattr(self, "speed"):
             if self.direction is Direction.NORTH:
                 return self.y - self.speed
             if self.direction is Direction.SOUTH:
@@ -443,8 +526,8 @@ class Collidable:
         return (
             (other.cx + other.w > self.cx)
             and (other.cx < self.cx + self.w)
-            and (other.cy + other.h > self.cy)
-            and (other.cy < self.cy + self.h)
+            and (other.cy + other.h >= self.cy)
+            and (other.cy <= self.cy + self.h)
         )
 
     def impacted_by(self, impactor: Collidable) -> bool:
@@ -607,12 +690,9 @@ class Bullet(Moveable, Collidable, Killable, Renderable):
         """
     )
 
-    _IN_FLIGHT: bool = False
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._direction = Direction.NORTH
-        Bullet._IN_FLIGHT = True
 
     def wall(self, new_position: int, limit: int) -> int:
         """
@@ -621,24 +701,16 @@ class Bullet(Moveable, Collidable, Killable, Renderable):
         assert self.direction is Direction.NORTH
         if new_position < limit + 2:
             self.die()
-            return limit + 2
+            return max([new_position, limit + 2])
         return new_position
 
     def die(self):
         """
         Kill this bullet, allowing the user to fire again.
         """
-        Bullet._IN_FLIGHT = False
         self.color = Color.RED
         self.speed = 0
         super().die()
-
-    @classmethod
-    def in_flight(cls) -> bool:
-        """
-        Test if a bullet is in flight.
-        """
-        return cls._IN_FLIGHT
 
 
 class Player(Moveable, Killable, Renderable):
@@ -670,26 +742,16 @@ class Player(Moveable, Killable, Renderable):
         assert self.direction is not Direction.SOUTH
 
         if self.direction is Direction.WEST:
-            if new_position < limit + 3:
-                self.speed = 0
-                return limit + 3
+            return max([new_position, limit + 1])
+        return min([new_position, limit - self.w - 2])
 
-        if self.direction is Direction.EAST:
-            if new_position + self.w < limit - 3:
-                self.speed = 0
-                return limit - self.w - 3
-
-        return new_position
-
-    def fire(self) -> Optional[Bullet]:
+    def fire(self) -> Bullet:
         """
         Fire a Bullet upwards, if enough time has elapsed
         since the last shot.
         """
-        if not Bullet.in_flight():
-            Sound.SHOOT.play()
-            return Bullet((self.x + (self.x + self.w)) // 2, self.y - 1, speed=3)
-        return None
+        Sound.SHOOT.play()
+        return Bullet((self.x + (self.x + self.w)) // 2, self.y - 1, speed=3)
 
     def die(self) -> None:
         """
@@ -700,7 +762,23 @@ class Player(Moveable, Killable, Renderable):
         super().die()
 
 
-class Squid(Gestalt, Collidable, Killable, Renderable):
+class Collectible:
+    """
+    Mixin to make a unit have a points value.
+    """
+
+    POINTS: Optional[int] = None
+
+    def points(self, shot_count: int) -> int:
+        """
+        Return the points this Collectible is worth at this shot count.
+        """
+        if self.POINTS is None:
+            raise NotImplementedError("Collectible.points must be overloaded")
+        return self.POINTS
+
+
+class Squid(Gestalt, Collidable, Killable, Collectible, Renderable):
     """
     The Squid Invader.
     """
@@ -727,7 +805,7 @@ class Squid(Gestalt, Collidable, Killable, Renderable):
     )
 
 
-class Crab(Gestalt, Collidable, Killable, Renderable):
+class Crab(Gestalt, Collidable, Killable, Collectible, Renderable):
     """
     The Crab Invader.
     """
@@ -754,7 +832,7 @@ class Crab(Gestalt, Collidable, Killable, Renderable):
     )
 
 
-class Octopus(Gestalt, Collidable, Killable, Renderable):
+class Octopus(Gestalt, Collidable, Killable, Collectible, Renderable):
     """
     The Octopus Invader.
     """
@@ -781,7 +859,7 @@ class Octopus(Gestalt, Collidable, Killable, Renderable):
     )
 
 
-class Mystery(Moveable, Collidable, Killable, Renderable):
+class Mystery(Moveable, Collidable, Killable, Collectible, Renderable):
     """
     The Mystery Ship.
     """
@@ -789,13 +867,16 @@ class Mystery(Moveable, Collidable, Killable, Renderable):
     COLOR: Color = Color.RED
     ICON: Icon = make_icon(
         """
+        ▁▁▁
        ▞█▀█▚
        ▔▘▔▝▔
         """
     )
     DEATH: Icon = make_icon(
         """
-        ⟫╳⟪
+         ⎽
+       ⟩⟫╳⟪〈
+         ⎺
         """
     )
 
@@ -804,11 +885,24 @@ class Mystery(Moveable, Collidable, Killable, Renderable):
         self._reached_wall = False
         self._sound = Sound.MYSTERY.play()
 
+    def points(self, shot_count: int) -> int:
+        """
+        Return the points value for the Mystery ship.
+        """
+        factors = [10, 5, 5, 10, 15, 10, 10, 5, 30, 10, 10, 10, 5, 15, 10]
+        return 10 * factors[shot_count % 15]
+
     def reached_wall(self) -> bool:
         """
         Check if the ship reached the wall unscathed.
         """
         return self._reached_wall
+
+    def on_every(self, frame: int) -> bool:
+        """
+        Slow the down fractionally to allow the Player a chance.
+        """
+        return frame % 4 != 0
 
     def wall(self, new_position: int, limit: int) -> int:
         """
@@ -817,21 +911,19 @@ class Mystery(Moveable, Collidable, Killable, Renderable):
         assert self.direction is not Direction.NORTH
         assert self.direction is not Direction.SOUTH
 
+        # handle east wall impact
         if self.direction is Direction.WEST:
             if new_position < limit + 1:
                 self._reached_wall = True
-                self.speed = 0
                 self.die()
-                return limit + 1
+            return max([new_position, limit])
 
-        if self.direction is Direction.EAST:
-            if new_position + self.w < limit - 1:
-                self._reached_wall = True
-                self.speed = 0
-                self.die()
-                return limit - self.w - 1
+        # handle west wall impact
+        if new_position + self.w < limit - 1:
+            self._reached_wall = True
+            self.die()
 
-        return new_position
+        return min([new_position, limit - self.w - 1])
 
     def die(self):
         """
@@ -839,9 +931,21 @@ class Mystery(Moveable, Collidable, Killable, Renderable):
         """
         if self._sound.is_playing():
             self._sound.stop()
-        self.color = Color.GREEN
+        self.color = Color.RED
         self.speed = 0
-        super().die()
+        if not self.reached_wall():
+            super().die()
+
+    @classmethod
+    def spawn(cls, x: int, y: int, width: int, shot_count: int) -> Mystery:
+        """
+        Spawn a new Mystery ship.
+        """
+        on_right = shot_count % 2 == 0
+        mystery = Mystery(x, y, speed=1)
+        mystery.x = width - x - mystery.w if on_right else mystery.x
+        mystery.direction = Direction.WEST if on_right else Direction.EAST
+        return mystery
 
 
 class Bomb(Moveable, Collidable, Killable, Renderable):
@@ -866,12 +970,9 @@ class Bomb(Moveable, Collidable, Killable, Renderable):
         """
     )
 
-    _IN_FLIGHT: int = 0
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._direction = Direction.SOUTH
-        Bomb._IN_FLIGHT += 1
 
     def wall(self, new_position: int, limit: int) -> int:
         """
@@ -880,24 +981,15 @@ class Bomb(Moveable, Collidable, Killable, Renderable):
         assert self.direction is Direction.SOUTH
         if new_position > limit - 2:
             self.die()
-            return limit - 2
-        return new_position
+        return min([new_position, limit - 2])
 
     def die(self):
         """
         Kill this bomb.
         """
-        Bomb._IN_FLIGHT -= 1
         self.color = Color.GREEN
         self.speed = 0
         super().die()
-
-    @classmethod
-    def in_flight(cls) -> int:
-        """
-        Test how many bombs are dropping.
-        """
-        return cls._IN_FLIGHT
 
 
 class SuperBomb(Bomb):

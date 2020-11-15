@@ -11,7 +11,7 @@ from typing import Generator, List
 
 # local imports
 from spacedinvaders.constants import Color
-from spacedinvaders.typing import Col, Row, Window
+from spacedinvaders.annotations import Col, Row, Window
 
 
 def regularize(string: str) -> str:
