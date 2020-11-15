@@ -11,7 +11,7 @@ import os
 import time
 from collections import deque
 from random import randint
-from typing import Tuple, Optional
+from typing import List, Tuple, Optional
 
 # local imports
 from .constants import Color, Control, Direction
@@ -23,7 +23,7 @@ from .annotations import Window, Row, Col
 locale.setlocale(locale.LC_ALL, "")
 CODEC = locale.getpreferredencoding()
 
-FRAMERATE = 30
+FRAMERATE = 60
 REAP_DELAY = 0.4
 
 LEFT_INPUTS = set([Control.LARR, Control.LKEY])
@@ -58,13 +58,14 @@ class PlayState:
     def __init__(self):
         self._frame: int = 0
         self._score: int = 0
-        self._high: int = 999
+        self._high: int = 0
         self._lives: int = 2
         self._credits: int = 0
         self._bullet: Optional[Bullet] = None
         self._bullet_count: int = 0
         self._mystery: Optional[Mystery] = None
         self._mystery_frame: int = -1
+        self._last_kills: List[Gestalt] = []
         self.last_wheel: Optional[bool] = None
         self.last10 = deque(maxlen=10)
         self.egged = False
@@ -91,11 +92,15 @@ class PlayState:
         return self._score
 
     @score.setter
-    def score(self, val: int) -> int:
+    def score(self, val: int):
         """
         Update the player's score.
         """
+        old_score = self._score
         self._score = val
+        if old_score <= 500 <= self._score:
+            self.lives += 1
+        self.high = max(self.high, self._score)
 
     @property
     def high(self) -> int:
@@ -187,6 +192,13 @@ class PlayState:
         The frame on which the mystery ship will appear.
         """
         return self._mystery_frame
+
+    @property
+    def last_kills(self) -> List[Gestalt]:
+        """
+        Player's last kills, if any.
+        """
+        return self._last_kills
 
 
 def initialize_screen(stdscr: Window) -> None:
@@ -314,8 +326,6 @@ def draw_hud(stdscr: Window, height: Row, width: Col, state: PlayState) -> None:
     with colorize(stdscr, Color.WHITE):
         stdscr.addstr(bar_y, width - 1 - len(label + creds), label, curses.A_DIM)
         stdscr.addstr(bar_y, width - 1 - len(creds), creds, curses.A_BOLD)
-    with colorize(stdscr, Color.BLUE):
-        stdscr.addstr(bar_y, width // 2 - 2, f"{state.bullet_count:04d}")
 
 
 def game_loop(stdscr: Window) -> None:
@@ -346,28 +356,8 @@ def game_loop(stdscr: Window) -> None:
 
     # place the vaders
     Gestalt.populate(2, 8)
-    """
-    y_pos = 8
-    for row in range(Gestalt.ROWS):
-        x_pos = 2
-        species = Squid if row < 1 else Crab if row < 3 else Octopus
-        for col in range(Gestalt.COLUMNS):
-            vader = species(x_pos, y_pos, speed=1)
-            x_pos += vader.w + 2
-        y_pos += vader.h + 1
 
-    # place the vaders
-    vaders = [[None for _ in range(VADER_COLUMNS)] for _ in range(VADER_ROWS)]
-    y_pos = 8
-    for row in range(VADER_ROWS):
-        x_pos = 2
-        species = Squid if row < 1 else Crab if row < 3 else Octopus
-        for col in range(VADER_COLUMNS):
-            vader = species(x_pos, y_pos, speed=1)
-            vaders[row][col] = vader
-            x_pos += vader.w + 2
-        y_pos += vader.h + 1
-    """
+    CONTROL_FLAG = False
 
     # loop where curr_key is the last character pressed or -1 on no input
     while (curr_key := stdscr.getch()) != Control.QUIT:
@@ -397,28 +387,32 @@ def game_loop(stdscr: Window) -> None:
         # erase the screen for redraw
         stdscr.erase()
 
-        from curses.ascii import ctrl
+        if CONTROL_FLAG:
+            # constant motion
 
-        if curr_key == ord(ctrl("d")):
-            state.lives -= 1
-            state.credits -= 1
+            # handle player actions
+            if curr_key == Control.FIRE and state.bullet is None:
+                state.bullet = player.fire()
+                state.bullet.render(stdscr)
+            elif curr_key in STOP_INPUTS:
+                player.speed = 0
+            elif curr_key in LEFT_INPUTS:
+                player.speed = 1
+                player.turn(Direction.WEST)
+            elif curr_key in RIGHT_INPUTS:
+                player.speed = 1
+                player.turn(Direction.EAST)
 
-        if curr_key == ord(ctrl("a")):
-            state.lives += 1
-            state.credits += 1
-
-        # handle player actions
-        if curr_key == Control.FIRE and state.bullet is None:
-            state.bullet = player.fire()
-            state.bullet.render(stdscr)
-        elif curr_key in STOP_INPUTS:
+        else:
             player.speed = 0
-        elif curr_key in LEFT_INPUTS:
-            player.speed = 1
-            player.turn(Direction.WEST)
-        elif curr_key in RIGHT_INPUTS:
-            player.speed = 1
-            player.turn(Direction.EAST)
+            # handle player actions
+            if curr_key == Control.FIRE and state.bullet is None:
+                state.bullet = player.fire()
+                state.bullet.render(stdscr)
+            elif curr_key in LEFT_INPUTS:
+                player.x = max(1, player.x - 1)
+            elif curr_key in RIGHT_INPUTS:
+                player.x = min(width - player.w - 1, player.x + 1)
 
         # update the player position
         player.move(stdscr, state.frame, width, height)
@@ -455,100 +449,42 @@ def game_loop(stdscr: Window) -> None:
                 state.mystery.move(stdscr, state.frame, width, height)
             state.mystery.render(stdscr)
 
-        # handle the vaders
-        """
-        flip = not state.frame % 15
-
-        no_turn = True
-        # by default search west to east
-        columns = range(VADER_COLUMNS)
-        # reverse the search if the gestalt is moving east
-        if Gestalt.hive_direction is Direction.EAST:
-            columns = range(VADER_COLUMNS - 1, -1, -1)
-        for col in columns:
-            # always search up from the player's position
-            for row in range(VADER_ROWS - 1, -1, -1):
-                vader = vaders[row][col]
-                if vader is None:
-                    continue
-
-                if flip:
-                    if no_turn:
-                        # we might already be heading south
-                        if vader.has_turned():
-                            vader.wheel()
-                        '''
-                        elif vader.direction is Direction.WEST:
-                            if vader.x <= 6:
-                                vader.direction = Direction.SOUTH
-                        elif vader.direction is Direction.EAST:
-                            if vader.x + vader.w >= width - 6:
-                                vader.direction = Direction.SOUTH
-                        '''
-                        no_turn = False
-
-                    if vader.icon == vader.ICON:
-                        vader.icon = vader.ALT
-                    else:
-                        vader.icon = vader.ICON
-
-        for col in columns:
-            for row in range(VADER_ROWS - 1, -1, -1):
-                vader = vaders[row][col]
-                if vader is None:
-                    continue
-
-                if flip:
-                    vader.move(stdscr)
-                vader.render(stdscr)
-
-        no_turn = True
-        # by default search west to east
-        columns = range(len(Gestalt.hive_members))
-        # reverse the search if the gestalt is moving east
-        if Gestalt.hive_direction is Direction.EAST:
-            columns = reversed(columns)
-
-        for col in columns:
-            column = Gestalt.hive_members[col]
-            # always search up from the player's position
-            for row in reversed(range(len(column))):
-                member = column[row]
-                if flip:
-                    if no_turn:
-                        if member.has_turned():
-                            member.wheel()
-                        no_turn = False
-                    if member.icon == member.ICON:
-                        member.icon = member.ALT
-                    else:
-                        member.icon = member.ICON
-
-                    member.move(stdscr, state.frame, width, height)
-                member.render(stdscr)
-
-        if flip:
-            #Sound.INVADER_4.play()
-            pass
-        """
-
+        # handle the invaders
         Gestalt.lockstep(stdscr, state.frame, width, height)
-        Gestalt.render_all(stdscr)
 
-        struck = []
+        # handle succesful player shots
+        has_kill = Gestalt.find_collision(state.bullet) if state.bullet else None
+        if has_kill:
+            state.score += has_kill.points(state.bullet_count)
+            state.last_kills.append(has_kill)
+            state.bullet = None
+
+        # reap any killed invaders
+        while state.last_kills and _reap(state.last_kills[0]):
+            state.last_kills.pop(0)
+
+        struck = set()
 
         # update the barriers on screen
         for idx, barrier in enumerate(barriers):
 
             # if the bullet could hit a barrier, check for an impact
             if state.bullet and barrier.impacted_by(state.bullet):
-                struck.insert(0, idx)
+                struck.add(idx)
+
+            for column in Gestalt.hive_members:
+                for member in reversed(column):
+                    if member.y + member.h < barrier.y:
+                        continue
+                    if barrier.impacted_by(member):
+                        struck.add(idx)
+                        break
 
             # render the barrier if it's had no collisions this round
             if not barrier.struck:
                 barrier.render(stdscr)
 
-        for idx in struck:
+        for idx in sorted(struck, reverse=True):
             barrier = barriers[idx]
             barrier.degrade()
             # the barrier may have been eliminated from play
@@ -568,15 +504,16 @@ def game_loop(stdscr: Window) -> None:
                 state.bullet.move(stdscr, state.frame, width, height)
                 state.bullet.render(stdscr)
 
+	# update the gestalt, so they cover the barriers if wiping
+        Gestalt.render_all(stdscr)
+
         # refresh the screen
         stdscr.refresh()
         state.frame += 1
 
 
 def main() -> None:
-    from pprint import pprint
-
-    pprint(curses.wrapper(game_loop))
+    curses.wrapper(game_loop)
 
 
 if __name__ == "__main__":

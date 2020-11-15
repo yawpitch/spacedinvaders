@@ -461,7 +461,23 @@ class Gestalt(Moveable):
         """
         Render the hive.
         """
-        [[v.render(stdscr) for v in col] for col in cls.hive_members]
+        for col in cls.hive_members:
+            for member in col:
+                member.render(stdscr)
+
+    @classmethod
+    def find_collision(cls, bullet: Bullet) -> Optional[Gestalt]:
+        """
+        Find any invader struck by the player's bullet.
+        """
+        for column in cls.hive_members:
+            for candidate in reversed(column):
+                if candidate.impacted_by(bullet):
+                    Sound.KILLSHOT.play()
+                    candidate.die()
+                    return column.pop(-1)
+
+        return None
 
 
 class Collidable:
@@ -625,49 +641,42 @@ class Destructible(Collidable):
 
             # the only other thing to worry about is invaders wiping the unit
             else:
-                cols_damaged, rows_damaged = set(), set()
-                for y_idx in range(other.cy, other.cy + other.h + 1):
-                    # ignore devastated and non-overlapping rows
-                    if (
-                        y_idx in self._devastated["rows"]
-                        or y_idx > self.cy + self.h
-                        or y_ix < self.cy
-                    ):
+
+                rows_damaged, cols_damaged = set(), set()
+                for row in range(len(self._state)):
+                    # ignore non-overlapping rows
+                    if not other.y < row + self.y < other.y + other.h:
                         continue
-                    for x_idx in range(other.cx, other.cx + other.w + 1):
-                        # ignore devastated and non-overlapping colums
-                        if (
-                            x_idx in self._devastated["cols"]
-                            or x_idx > self.xw
-                            or x_idx < self.cx
-                        ):
+                    for col in range(len(self._state[row])):
+                        # ignore non-overlapping rows
+                        # had to massage the constants to keep the effect
+                        # somewhat pleasing
+                        if not other.x - 2 < col + self.x < other.x + other.w + 2:
                             continue
-                        hit_y = other.cy - self.cy
-                        hit_x = other.cx - self.cx
-                        if self._state[hit_y][hit_x] != " ":
-                            self._state[hit_y][hit_x] = " "
-                            rows_damaged.add(hit_y)
-                            cols_damaged.add(hit_x)
-                            damaged = True
+                        try:
+                            # clear out the overlap
+                            if self._state[row][col] != " ":
+                                self._state[row][col] = " "
+                                rows_damaged.add(row)
+                                cols_damaged.add(col)
+                                damaged = True
+                        except IndexError:
+                            raise ValueError(f"{row},{col} {self._state}")
 
                 # check for devastation
                 for row_idx in rows_damaged:
-                    for col_idx in range(self.cx, self.cx + self.w + 1):
-                        if col_idx in self._devastated["cols"]:
-                            continue
+                    for col_idx in range(len(self._state[row_idx])):
                         if self._state[row_idx][col_idx] != " ":
                             break
                     else:
                         self._devastated["rows"].add(row_idx)
 
                 for col_idx in cols_damaged:
-                    for row_idx in range(self.cy, self.cy + self.h + 1):
-                        if row_idx in self._devastated["rows"]:
-                            continue
+                    for row_idx in range(len(self._state)):
                         if self._state[row_idx][col_idx] != " ":
                             break
                     else:
-                        self._devastated["rows"].add(row_idx)
+                        self._devastated["cols"].add(row_idx)
 
         if damaged:
             self.icon = "\n".join("".join(i) for i in self._state)
@@ -783,7 +792,7 @@ class Squid(Gestalt, Collidable, Killable, Collectible, Renderable):
     The Squid Invader.
     """
 
-    POINTS: 30
+    POINTS = 30
 
     COLOR: Color = Color.CYAN
     ICON: Icon = make_icon(
@@ -810,7 +819,7 @@ class Crab(Gestalt, Collidable, Killable, Collectible, Renderable):
     The Crab Invader.
     """
 
-    POINTS: 20
+    POINTS = 20
 
     COLOR: Color = Color.CYAN
     ICON: Icon = make_icon(
@@ -837,7 +846,7 @@ class Octopus(Gestalt, Collidable, Killable, Collectible, Renderable):
     The Octopus Invader.
     """
 
-    POINTS: 10
+    POINTS = 10
 
     COLOR: Color = Color.CYAN
     ICON: Icon = make_icon(
@@ -902,7 +911,7 @@ class Mystery(Moveable, Collidable, Killable, Collectible, Renderable):
         """
         Slow the down fractionally to allow the Player a chance.
         """
-        return frame % 4 != 0
+        return frame % 3 == 0
 
     def wall(self, new_position: int, limit: int) -> int:
         """
