@@ -43,4 +43,4 @@ def fit_within(text: str, rows: Row, cols: Col) -> List[str]:
     Wrap (and if necessary truncate) text to fit within a box defined by lines
     and cols.
     """
-    return wrap(shorten(text, (cols - 2) * (rows - 2)), cols=cols - 2)
+    return wrap(shorten(text, (cols - 2) * (rows - 2)), width=cols - 2)

@@ -21,17 +21,11 @@ from .sounds import Sound
 from .annotations import Window, Row, Col
 
 locale.setlocale(locale.LC_ALL, "")
+
 CODEC = locale.getpreferredencoding()
-
 FRAMERATE = 60
-REAP_DELAY = 0.4
 
-LEFT_INPUTS = set([Control.LARR, Control.LKEY])
-RIGHT_INPUTS = set([Control.RARR, Control.RKEY])
-UP_INPUTS = set([Control.UARR, Control.UKEY])
-DOWN_INPUTS = set([Control.DARR, Control.DKEY])
-STOP_INPUTS = UP_INPUTS | DOWN_INPUTS
-
+# Constnats that represent the screen dimensions
 ARCADE_ASPECT = 256 / 224
 PIXEL_ASPECT = 2.0
 BARRIER_WIDTH = len(Barrier.ICON.splitlines()[0])
@@ -40,12 +34,6 @@ ARENA_WIDTH = BARRIER_WIDTH * 10
 ARENA_HEIGHT = round(ARENA_WIDTH * ARCADE_ASPECT / PIXEL_ASPECT)
 if ARENA_HEIGHT % 2:
     ARENA_HEIGHT += 1
-KOMANDO = deque(
-    [Control.UARR] * 2
-    + [Control.DARR] * 2
-    + [Control.LARR, Control.RARR] * 2
-    + [Control.BKEY, Control.LKEY]
-)
 
 
 class PlayState:
@@ -53,23 +41,44 @@ class PlayState:
     Class to track the current game state.
     """
 
-    FRAME_ROLLOVER = FRAMERATE * 30
-
     def __init__(self):
+        self._screen: int = 0
         self._frame: int = 0
         self._score: int = 0
         self._high: int = 0
-        self._lives: int = 2
+        self._lives: int = 3
+        self._handling_death: bool = False
+        self._respawn_delay: int = round(1.5 * FRAMERATE)
         self._credits: int = 0
         self._bullet: Optional[Bullet] = None
         self._bullet_count: int = 0
         self._bullet_delay: int = 0
         self._mystery: Optional[Mystery] = None
-        self._mystery_frame: int = -1
+        self._mystery_frame: Optional[int] = 35 * FRAMERATE
         self._last_kills: List[Gestalt] = []
-        self.last_wheel: Optional[bool] = None
         self.last10 = deque(maxlen=10)
         self.egged = False
+
+    @property
+    def screen(self) -> int:
+        """
+        Current screen.
+        """
+        return self._screen
+
+    @screen.setter
+    def screen(self, val: int) -> int:
+        """
+        Update the current screen.
+        """
+        self._screen = val
+        self._frame = 0
+        self._bullet = None
+        self._bullet_count = 0
+        self._bullet_delay = 0
+        self._mystery = None
+        self._mystery_frame: int = 25 * FRAMERATE
+        self._last_kills = []
 
     @property
     def frame(self) -> int:
@@ -83,8 +92,12 @@ class PlayState:
         """
         Update the current frame.
         """
+        if self._mystery_frame is not None:
+            self._mystery_frame -= 1
+        if self._respawn_delay:
+            self._respawn_delay -= 1
         self._bullet_delay = max(0, self._bullet_delay - 1)
-        self._frame = val % self.FRAME_ROLLOVER
+        self._frame = val
 
     @property
     def score(self) -> int:
@@ -100,7 +113,7 @@ class PlayState:
         """
         old_score = self._score
         self._score = val
-        if old_score <= 500 <= self._score:
+        if old_score <= 1500 <= self._score:
             self.lives += 1
         self.high = max(self.high, self._score)
 
@@ -131,7 +144,31 @@ class PlayState:
         Update the player's number of lives.
         Maintains the range 0-3 inclusive.
         """
-        self._lives = max(0, min(val, 3))
+        if val < self._lives:
+            self._handling_death = True
+        self._lives = max(0, min(val, 4))
+
+    @property
+    def handling_death(self) -> bool:
+        """
+        Are we currently handling a death?
+        """
+        return self._handling_death
+
+    @handling_death.setter
+    def handling_death(self, new: bool):
+        """
+        Reset the death handling flag.
+        """
+        if not new:
+            self._respawn_delay += round(1.5 * FRAMERATE)
+        self._handling_death = False
+
+    def can_spawn(self) -> bool:
+        """
+        Is the player eligible to respawn?
+        """
+        return not self._respawn_delay
 
     @property
     def credits(self) -> int:
@@ -147,6 +184,34 @@ class PlayState:
         Maintains the range 0-99 inclusive.
         """
         self._credits = max(0, min(val, 99))
+
+    @property
+    def player_start_x(self) -> int:
+        """
+        Starting x position for the player, from screen left.
+        """
+        return 8
+
+    @property
+    def player_start_y(self) -> int:
+        """
+        Starting y offset from screen bottom.
+        """
+        return 4
+
+    @property
+    def invaders_start_x(self) -> int:
+        """
+        Starting x position for the invaders, from screen left.
+        """
+        return 12
+
+    @property
+    def invaders_start_y(self) -> int:
+        """
+        Starting y position for the invaders, from screen top.
+        """
+        return [8, 10, 14, 18, 18, 18, 20, 20, 20][self.screen % 10]
 
     def can_fire(self) -> bool:
         """
@@ -191,16 +256,26 @@ class PlayState:
         Update the mystery ship on screen.
         """
         if ship is None:
-            imprecision = round(1.6 * FRAMERATE)
-            self._mystery_frame = FRAMERATE * 25 + randint(-imprecision, imprecision)
+            self._mystery_frame = FRAMERATE * 25
+        else:
+            self._mystery_frame = None
         self._mystery = ship
 
     @property
     def mystery_frame(self) -> int:
         """
-        The frame on which the mystery ship will appear.
+        Countdown to mystery ship launch.
         """
+        if self._mystery_frame is None:
+            return 666
         return self._mystery_frame
+
+    @mystery_frame.setter
+    def mystery_frame(self, val: Optional[int]):
+        """
+        Reset (or stop) the countdown.
+        """
+        self._mystery_frame = val
 
     @property
     def last_kills(self) -> List[Gestalt]:
@@ -231,7 +306,6 @@ def initialize_screen(stdscr: Window) -> None:
         curses.init_pair(Color.BLUE, curses.COLOR_BLUE, curses.COLOR_BLACK)
         curses.init_pair(Color.CYAN, curses.COLOR_CYAN, curses.COLOR_BLACK)
         curses.init_pair(Color.WHITE, curses.COLOR_WHITE, curses.COLOR_BLACK)
-        curses.init_pair(Color.BLACK_ON_WHITE, curses.COLOR_BLACK, curses.COLOR_WHITE)
 
     # center the play arena in the terminal
     resize_arena(stdscr)
@@ -327,7 +401,7 @@ def draw_hud(stdscr: Window, height: Row, width: Col, state: PlayState) -> None:
 
     # render bottom status bar
     bar_y = height - 1
-    lives = " ".join(Player.ICON for _ in range(state.lives)).encode(CODEC)
+    lives = " ".join(Player.ICON for _ in range(state.lives - 1)).encode(CODEC)
     with colorize(stdscr, Color.YELLOW):
         stdscr.addstr(bar_y, 0, lives)
     label = "CREDITS: "
@@ -340,7 +414,7 @@ def draw_hud(stdscr: Window, height: Row, width: Col, state: PlayState) -> None:
         stdscr.addstr(
             bar_y,
             width // 2,
-            str(state._bullet_delay),
+            str(state.mystery_frame),
             curses.A_BOLD,
         )
 
@@ -356,25 +430,11 @@ def game_loop(stdscr: Window) -> None:
     # calculate the new center points
     center_y, center_x = round(height / 2), round(width / 2)
 
-    player = Player(center_x, height - 4, speed=0)
+    # track the play state
     state = PlayState()
-    # force generation of first mystery frame
-    state.mystery = None
 
     last_time = None
-
-    # place the barriers
-    barriers = []
-    barrier_x = round(BARRIER_WIDTH * 1.5)
-    barrier_y = player.y - player.h - BARRIER_HEIGHT
-    for idx in range(4):
-        barriers.append(Barrier(barrier_x, barrier_y))
-        barrier_x += BARRIER_WIDTH * 2
-
-    # place the vaders
-    Gestalt.populate(2, 8)
-
-    CONTROL_FLAG = False
+    last_screen = None
 
     # loop where curr_key is the last character pressed or -1 on no input
     while (curr_key := stdscr.getch()) != Control.QUIT:
@@ -389,7 +449,7 @@ def game_loop(stdscr: Window) -> None:
         # update the last 10
         if not state.egged and curr_key != Control.NULL:
             state.last10.append(curr_key)
-            if curr_key == Control.LKEY and state.last10 == KOMANDO:
+            if curr_key == Control.LKEY and Control.has_komando(state.last10):
                 state.credits += 10
                 state.egged = True
 
@@ -404,84 +464,106 @@ def game_loop(stdscr: Window) -> None:
         # erase the screen for redraw
         stdscr.erase()
 
-        if CONTROL_FLAG:
-            # constant motion
+        # starting a new screen
+        if last_screen is None or state.screen != last_screen:
 
-            # handle player actions
+            # spawn the player
+            player = Player(
+                state.player_start_x, height - state.player_start_y, speed=0
+            )
+            # place the barriers
+            barriers = []
+            barrier_x = round(BARRIER_WIDTH * 1.5)
+            barrier_y = height - BARRIER_HEIGHT - state.player_start_y - 1
+            for idx in range(4):
+                barriers.append(Barrier(barrier_x, barrier_y))
+                barrier_x += BARRIER_WIDTH * 2
+
+            # place the vaders
+            Gestalt.populate(state.invaders_start_x, state.invaders_start_y)
+            last_screen = state.screen
+
+        # handle player actions; delay for respawn
+        player.speed = 0
+        if state.can_spawn() and not state.handling_death:
             if curr_key == Control.FIRE and state.bullet is None:
                 if state.can_fire():
                     state.bullet = player.fire()
                     state.bullet.render(stdscr)
-            elif curr_key in STOP_INPUTS:
-                player.speed = 0
-            elif curr_key in LEFT_INPUTS:
-                player.speed = 1
-                player.turn(Direction.WEST)
-            elif curr_key in RIGHT_INPUTS:
-                player.speed = 1
-                player.turn(Direction.EAST)
-
-        else:
-            player.speed = 0
-            # handle player actions
-            if curr_key == Control.FIRE and state.bullet is None:
-                if state.can_fire():
-                    state.bullet = player.fire()
-                    state.bullet.render(stdscr)
-            elif curr_key in LEFT_INPUTS:
+            elif Control.is_left(curr_key):
                 player.x = max(1, player.x - 1)
-            elif curr_key in RIGHT_INPUTS:
+            elif Control.is_right(curr_key):
                 player.x = min(width - player.w - 1, player.x + 1)
 
-        # update the player position
-        player.move(stdscr, state.frame, width, height)
-        player.render(stdscr)
+        # pause invader and player movements during death
+        if not state.handling_death:
+            # launch the mystery ship
+            if state.mystery_frame <= 0 and not Gestalt.superboom():
+                if Gestalt.remaining() <= 8:
+                    state.mystery_frame = None
+                else:
+                    state.mystery = Mystery.spawn(1, 3, width, state.bullet_count)
 
-        # render HUD information
-        draw_hud(stdscr, height, width, state)
+            # move the player
+            player.move(stdscr, state.frame, width, height)
 
-        def _reap(unit: Renderable) -> bool:
-            if isinstance(unit, Killable) and unit.is_dead():
-                if (time.time() - unit.time_of_death) > REAP_DELAY:
-                    return True
-            return False
-
-        # launch the mystery ship
-        if state.frame == state.mystery_frame:
-            state.mystery = Mystery.spawn(1, 3, width, state.bullet_count)
-
-        # handle the mystery ship's movement and interactions
-        if state.mystery:
-            if state.mystery.reached_wall():
-                state.mystery = None
-            elif state.bullet and state.mystery.impacted_by(state.bullet):
-                state.mystery.die()
-                state.bullet = None
-                state.score += state.mystery.points(state.bullet_count)
-
-        if state.mystery and _reap(state.mystery):
-            state.mystery = None
-
-        # render the mystery ship, if any
-        if state.mystery:
-            if not state.mystery.is_dead():
+            # move the invaders
+            Gestalt.lockstep(stdscr, state.frame, width, height, player.x, state.score)
+            # move the mystery ship, if any
+            if state.mystery and not state.mystery.is_dead():
                 state.mystery.move(stdscr, state.frame, width, height)
-            state.mystery.render(stdscr)
 
-        # handle the invaders
-        Gestalt.lockstep(stdscr, state.frame, width, height, player.x, state.score)
+        # projectiles carry on their merry way during death handling
 
-        # handle succesful player shots
-        has_kill = Gestalt.find_collision(state.bullet) if state.bullet else None
-        if has_kill:
-            state.score += has_kill.points(state.bullet_count)
-            state.last_kills.append(has_kill)
-            state.bullet = None
+        # move the bullet, if any
+        if state.bullet and not state.bullet.is_dead():
+            state.bullet.move(stdscr, state.frame, width, height)
 
-        # reap any killed invaders
-        while state.last_kills and _reap(state.last_kills[0]):
-            state.last_kills.pop(0)
+        # move any bombs dropped by the gestalt
+        for bomb in Gestalt.hive_dropped:
+            bomb.move(stdscr, state.frame, width, height)
 
+        # however collisions end during death throes
+
+        if not state.handling_death:
+
+            # handle bomb interactions with the player
+            # note that bombs don't effect the player below the "invasion" row
+            for bomb in Gestalt.hive_dropped:
+                # don't effect the player during respawn
+                if state.handling_death or not state.can_spawn():
+                    break
+                if bomb.dropped_from >= barrier_y + BARRIER_HEIGHT - 3:
+                    continue
+                if state.bullet and bomb.impacted_by(state.bullet):
+                    bomb.die()
+                    # player laser's damage on first hit, kill on second
+                    if isinstance(bomb, SuperBomb):
+                        state.bullet.die()
+                    # player laser's kill but pass through other bombs
+                    else:
+                        state.bullet.impacted = False
+                if not bomb.is_dead() and player.impacted_by(bomb):
+                    player.die()
+                    state.lives -= 1
+
+            # handle succesful player shots
+            has_kill = Gestalt.find_collision(state.bullet) if state.bullet else None
+            if has_kill:
+                state.score += has_kill.points(state.bullet_count)
+                state.last_kills.append(has_kill)
+                state.bullet = None
+
+            # handle the mystery ship's collisions
+            if state.mystery:
+                if state.mystery.reached_wall():
+                    state.mystery = None
+                elif state.bullet and state.mystery.impacted_by(state.bullet):
+                    state.mystery.die()
+                    state.bullet = None
+                    state.score += state.mystery.points(state.bullet_count)
+
+        # ... except for collisions with landscape
         struck = set()
 
         # update the barriers on screen
@@ -522,34 +604,61 @@ def game_loop(stdscr: Window) -> None:
                 # render the barrier
                 barrier.render(stdscr)
 
+        # reap a dead bullet
+        if state.bullet and (state.bullet.impacted or state.bullet.reap()):
+            state.bullet = None
+
+        # reap any killed invaders
+        while state.last_kills and state.last_kills[0].reap():
+            state.last_kills.pop(0)
+
         # reap any killed bombs
         bombs = Gestalt.hive_dropped
-        while bombs and (bombs[-1].impacted or _reap(bombs[-1])):
-            bombs.pop()
+        while bombs and (bombs[-1].impacted or bombs[-1].reap()):
+            Gestalt.hive_dropped.pop()
+
+        # reap the mystery ship, if any
+        if state.mystery and state.mystery.reap():
+            state.mystery = None
+
+        # reap the player and resurrect
+        if player.is_dead() and player.reap():
+            player.resurrect(state.player_start_x)
+
+        # render the mystery ship, if any
+        if state.mystery:
+            state.mystery.render(stdscr)
 
         # render any remaining bombs
-        for bomb in bombs:
-            bomb.move(stdscr, state.frame, width, height)
+        for bomb in Gestalt.hive_dropped:
+            if bomb.y > barrier_y - 1:
+                bomb.color = Color.GREEN
             bomb.render(stdscr)
 
         # render the bullet, if any
         if state.bullet:
-            if state.bullet.impacted:
-                state.bullet = None
-            elif _reap(state.bullet):
-                state.bullet = None
-            else:
-                state.bullet.move(stdscr, state.frame, width, height)
-                state.bullet.render(stdscr)
+            state.bullet.render(stdscr)
 
-        # update the gestalt, so they cover the barriers if wiping
+        # render the gestalt, so they cover the barriers if wiping
         Gestalt.render_all(stdscr)
 
         for kill in state.last_kills:
             kill.render(stdscr)
 
+        # render the player, if not respawning
+        if player.is_dead() or state.can_spawn():
+            player.render(stdscr)
+
+        # update the HUD
+        draw_hud(stdscr, height, width, state)
+
         # refresh the screen
         stdscr.refresh()
+
+        # pause everything on death
+        if state.handling_death:
+            curses.delay_output(850)
+            state.handling_death = False
         state.frame += 1
 
 

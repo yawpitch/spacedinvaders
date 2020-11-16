@@ -193,6 +193,8 @@ class Killable:
     Mixin to allow a Renderable to be killed.
     """
 
+    # time to wait before reaping
+    REAP_DELAY = 0.4
     # icon to present on death
     DEATH: Icon
 
@@ -227,6 +229,11 @@ class Killable:
         """
         self.icon = self.DEATH
         self.time_of_death = time.time()
+
+    def reap(self) -> bool:
+        if self.is_dead():
+            return time.time() - self.time_of_death > self.REAP_DELAY
+        return False
 
 
 class Moveable:
@@ -336,7 +343,7 @@ class Gestalt(Moveable):
 
     SIGHT = None
     WALL_BUFFER: int = 1
-    TURN_BUFFER: int = 4
+    TURN_BUFFER: int = 2
     COLUMNS: int = 11
     ROWS: int = 5
     hive_members: List[List[Invader]] = []
@@ -375,6 +382,17 @@ class Gestalt(Moveable):
                 x_pos += vader.w + x_sep
             y_pos += vader.h + y_sep
 
+    @classmethod
+    def scootch(cls, x: int, y: int) -> None:
+        """
+        Shift the whole gestalt to a new position. Both x and y
+        are the relative values you want to move by, not absolutes.
+        """
+        for col in cls.hive_members:
+            for member in col:
+                member.x += x
+                member.y += y
+
     @property
     def speed(self) -> int:
         """
@@ -394,8 +412,7 @@ class Gestalt(Moveable):
         """
         Speed up as invaders get killed.
         """
-        remaining = sum(len(col) for col in cls.hive_members)
-        return frame % max(1, remaining) == 0
+        return frame % max(1, cls.remaining()) == 0
 
     @property
     def direction(self) -> Direction:
@@ -461,7 +478,7 @@ class Gestalt(Moveable):
         can_sight = [c for c in columns if any(members[c])]
 
         # load a weapon, if we can fire
-        if can_sight and cls.can_drop(player_score):
+        if cls.hive_moves > 3 and can_sight and cls.can_drop(player_score):
             # determine what weapon to drop
             arsenal = [Seeker]
             if not any(isinstance(b, SuperBomb) for b in cls.hive_dropped):
@@ -469,7 +486,6 @@ class Gestalt(Moveable):
             if count > 8:
                 arsenal.append(Bomb)
             bomb = choice(arsenal)
-
             # if the bomb is a Seeker we need to drop it from the column
             # nearest the player's current x position
             if bomb is Seeker:
@@ -478,12 +494,12 @@ class Gestalt(Moveable):
                     while members[idx] and members[idx][-1] is None:
                         members[idx].pop()
                     member = members[idx][-1]
-                    return abs(player_x - (2 * member.x + member.w))
+                    return abs(player_x - ((2 * member.x + member.w) // 2))
 
                 sight = min(can_sight, key=find_goose)
-
             else:
                 sight = choice(can_sight)
+
         for col in columns:
             column = members[col]
             if not column:
@@ -504,6 +520,9 @@ class Gestalt(Moveable):
                         member.direction = cls.hive_aboutface
                     no_turn = False
 
+                if count == 1 and member.direction is Direction.EAST:
+                    if member.x + member.w + member.speed > width - cls.TURN_BUFFER:
+                        member.x += 1
                 member.move(stdscr, frame, width, height)
 
                 # drop the bomb from the bottommost member
@@ -578,6 +597,13 @@ class Gestalt(Moveable):
         else:
             delay = 7
         return cls.hive_dropped[0].in_flight % 60 > delay * 10
+
+    @classmethod
+    def superboom(cls) -> bool:
+        """
+        Check if a SuperBomb is in flight.
+        """
+        return any(isinstance(b, SuperBomb) for b in cls.hive_dropped)
 
 
 class Collidable:
@@ -828,7 +854,7 @@ class Bullet(Moveable, Collidable, Killable, Renderable):
         super().die()
 
 
-class Player(Moveable, Killable, Renderable):
+class Player(Moveable, Collidable, Killable, Renderable):
     """
     The player's unit.
     """
@@ -847,7 +873,6 @@ class Player(Moveable, Killable, Renderable):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._last_shot = 0
 
     def wall(self, new_position: int, limit: int) -> int:
         """
@@ -857,8 +882,8 @@ class Player(Moveable, Killable, Renderable):
         assert self.direction is not Direction.SOUTH
 
         if self.direction is Direction.WEST:
-            return max([new_position, limit + 1])
-        return min([new_position, limit - self.w - 2])
+            return max(new_position, limit + 1)
+        return min(new_position, limit - self.w - 2)
 
     def fire(self) -> Bullet:
         """
@@ -875,6 +900,15 @@ class Player(Moveable, Killable, Renderable):
         self.speed = 0
         Sound.EXPLOSION.play()
         super().die()
+
+    def resurrect(self, x: int):
+        """
+        Resurrect the player.
+        """
+        self.icon = self.ICON
+        self.speed = 0
+        self.x = x
+        self.time_of_death = None
 
 
 class Collectible:
@@ -1079,7 +1113,8 @@ class Droppable(Moveable, Collidable, Killable, Reskinable, Renderable):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.direction = Direction.SOUTH
-        self.in_flight = 0
+        self.dropped_from: int = self.y
+        self.in_flight: int = 0
 
     def on_every(self, frame: int) -> bool:
         """
@@ -1157,12 +1192,12 @@ class SuperBomb(Bomb):
     COLOR: Color = Color.MAGENTA
     ICON: Icon = make_icon(
         """
-        ⧘
+        ⟅
         """
     )
     ALT: Icon = make_icon(
         """
-        ⧙
+        ⟆
         """
     )
     DEATH: Optional[Icon] = make_icon(

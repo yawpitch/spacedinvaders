@@ -3,13 +3,17 @@
 """
 Various constants used by the game.
 """
+from __future__ import annotations
+
 # stdlib imports
 import curses
 import curses.ascii
-from enum import IntFlag, auto
+from collections import deque
+from enum import IntEnum, IntFlag, auto
+from typing import Deque
 
 
-class Color(IntFlag):
+class Color(IntEnum):
     """
     The various colors for display.
     """
@@ -21,10 +25,9 @@ class Color(IntFlag):
     BLUE = auto()
     CYAN = auto()
     WHITE = auto()
-    BLACK_ON_WHITE = auto()
 
 
-class Control(IntFlag):
+class Control(IntEnum):
     """
     The valid keyboard controls.
     """
@@ -41,6 +44,35 @@ class Control(IntFlag):
     RKEY = ord("d")
     FIRE = curses.ascii.SP
     BKEY = ord("b")
+
+    @classmethod
+    def is_left(cls, command: int) -> bool:
+        """
+        Check if a valid left control has been issued.
+        """
+        return command == cls.LARR or command == cls.LKEY
+
+    @classmethod
+    def is_right(cls, command: int) -> bool:
+        """
+        Check if a valid left control has been issued.
+        """
+        return command == cls.RARR or command == cls.RKEY
+
+    @staticmethod
+    def has_komando(cls, last10: Deque[Control]) -> bool:
+        """
+        Check if the player has komando'd.
+        """
+        return last10 == KOMANDO
+
+
+KOMANDO = deque(
+    [Control.UARR] * 2
+    + [Control.DARR] * 2
+    + [Control.LARR, Control.RARR] * 2
+    + [Control.BKEY, Control.LKEY]
+)
 
 
 class Direction(IntFlag):
