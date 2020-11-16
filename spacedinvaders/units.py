@@ -334,11 +334,12 @@ class Gestalt(Moveable):
     Moveables that act as one.
     """
 
+    SIGHT = None
     WALL_BUFFER: int = 1
     TURN_BUFFER: int = 4
     COLUMNS: int = 11
     ROWS: int = 5
-    hive_members: List[List[Invader]] = [[] for _ in range(COLUMNS)]
+    hive_members: List[List[Invader]] = []
     hive_moves: int = 0
     hive_direction: Direction = Direction.EAST
     hive_aboutface: Direction = Direction.WEST
@@ -348,9 +349,11 @@ class Gestalt(Moveable):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        row, col = divmod(sum(len(l) for l in Gestalt.hive_members), Gestalt.COLUMNS)
+        row, col = divmod(
+            sum(sum(1 for i in l if i) for l in Gestalt.hive_members), Gestalt.COLUMNS
+        )
         assert (row, col) != (Gestalt.ROWS, 1)
-        Gestalt.hive_members[col].append(self)
+        Gestalt.hive_members[col][row] = self
 
     @classmethod
     def populate(cls, x: int, y: int, *, x_sep: int = 2, y_sep: int = 1) -> None:
@@ -360,6 +363,7 @@ class Gestalt(Moveable):
         # clear any existing hive
         for col in Gestalt.hive_members:
             col.clear()
+        Gestalt.hive_members = [[None] * cls.ROWS for _ in range(cls.COLUMNS)]
 
         # place the invaders
         y_pos = y
@@ -420,7 +424,7 @@ class Gestalt(Moveable):
         """
         The number of remaining invaders.
         """
-        return sum(len(c) for c in cls.hive_members)
+        return sum(sum(1 for v in c if v) for c in cls.hive_members)
 
     @classmethod
     def lockstep(
@@ -453,8 +457,12 @@ class Gestalt(Moveable):
         count = cls.remaining()
 
         bomb = sight = None
+        # narrow the search to the columns with a surviving member
+        can_sight = [c for c in columns if any(members[c])]
+
         # load a weapon, if we can fire
-        if cls.can_drop(player_score):
+        if can_sight and cls.can_drop(player_score):
+            # determine what weapon to drop
             arsenal = [Seeker]
             if not any(isinstance(b, SuperBomb) for b in cls.hive_dropped):
                 arsenal.append(SuperBomb)
@@ -464,24 +472,27 @@ class Gestalt(Moveable):
 
             # if the bomb is a Seeker we need to drop it from the column
             # nearest the player's current x position
-            if isinstance(bomb, Seeker):
-                sight = min(
-                    columns,
-                    key=lambda i: abs(
-                        ((members[i][0].x + members[i][0]) // 2) - player_x
-                    ),
-                )
-            else:
-                sight = choice(columns)
+            if bomb is Seeker:
 
+                def find_goose(idx):
+                    while members[idx] and members[idx][-1] is None:
+                        members[idx].pop()
+                    member = members[idx][-1]
+                    return abs(player_x - (2 * member.x + member.w))
+
+                sight = min(can_sight, key=find_goose)
+
+            else:
+                sight = choice(can_sight)
         for col in columns:
             column = members[col]
             if not column:
                 continue
             # always search up from the player's position
             for idx, row in enumerate(reversed(range(len(column)))):
-
                 member = column[row]
+                if member is None:
+                    continue
                 if no_turn:
                     if cls.hive_direction is Direction.WEST:
                         if member.x <= cls.TURN_BUFFER:
@@ -521,8 +532,11 @@ class Gestalt(Moveable):
         Render the hive.
         """
         for col in cls.hive_members:
+            while col and col[-1] is None:
+                col.pop()
             for member in col:
-                member.render(stdscr)
+                if member:
+                    member.render(stdscr)
 
     @classmethod
     def find_collision(cls, bullet: Bullet) -> Optional[Gestalt]:
@@ -530,12 +544,16 @@ class Gestalt(Moveable):
         Find any invader struck by the player's bullet.
         """
         for column in cls.hive_members:
-            for candidate in reversed(column):
+            for row in reversed(range(len(column))):
+                candidate = column[row]
+                if candidate is None:
+                    continue
                 if candidate.impacted_by(bullet):
                     Sound.KILLSHOT.play()
+                    candidate.color = Color.RED
                     candidate.die()
-                    return column.pop(-1)
-
+                    column[row] = None
+                    return candidate
         return None
 
     @classmethod
@@ -598,6 +616,7 @@ class Collidable:
         """
         The x coordinate of this unit's collision box.
         """
+        return self.x
         if hasattr(self, "speed"):
             if self.direction is Direction.EAST:
                 return self.x + self.speed
@@ -610,6 +629,7 @@ class Collidable:
         """
         The y coordinate of this unit's collision box.
         """
+        return self.y
         if hasattr(self, "speed"):
             if self.direction is Direction.NORTH:
                 return self.y - self.speed
@@ -621,6 +641,10 @@ class Collidable:
         """
         Tests if this unit and some other will collide on next move.
         """
+        if isinstance(self, Killable) and self.is_dead():
+            return False
+        if isinstance(other, Killable) and other.is_dead():
+            return False
         return (
             (other.cx + other.w > self.cx)
             and (other.cx < self.cx + self.w)

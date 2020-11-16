@@ -63,6 +63,7 @@ class PlayState:
         self._credits: int = 0
         self._bullet: Optional[Bullet] = None
         self._bullet_count: int = 0
+        self._bullet_delay: int = 0
         self._mystery: Optional[Mystery] = None
         self._mystery_frame: int = -1
         self._last_kills: List[Gestalt] = []
@@ -82,6 +83,7 @@ class PlayState:
         """
         Update the current frame.
         """
+        self._bullet_delay = max(0, self._bullet_delay - 1)
         self._frame = val % self.FRAME_ROLLOVER
 
     @property
@@ -146,6 +148,12 @@ class PlayState:
         """
         self._credits = max(0, min(val, 99))
 
+    def can_fire(self) -> bool:
+        """
+        Check if the player can fire.
+        """
+        return not self._bullet_delay
+
     @property
     def bullet(self) -> Optional[Bullet]:
         """
@@ -159,6 +167,7 @@ class PlayState:
         Update the player's bullet.
         """
         if fired is None:
+            self._bullet_delay += 20
             self._bullet_count += 1
         self._bullet = fired
 
@@ -327,6 +336,14 @@ def draw_hud(stdscr: Window, height: Row, width: Col, state: PlayState) -> None:
         stdscr.addstr(bar_y, width - 1 - len(label + creds), label, curses.A_DIM)
         stdscr.addstr(bar_y, width - 1 - len(creds), creds, curses.A_BOLD)
 
+    with colorize(stdscr, Color.BLUE):
+        stdscr.addstr(
+            bar_y,
+            width // 2,
+            str(state._bullet_delay),
+            curses.A_BOLD,
+        )
+
 
 def game_loop(stdscr: Window) -> None:
 
@@ -392,8 +409,9 @@ def game_loop(stdscr: Window) -> None:
 
             # handle player actions
             if curr_key == Control.FIRE and state.bullet is None:
-                state.bullet = player.fire()
-                state.bullet.render(stdscr)
+                if state.can_fire():
+                    state.bullet = player.fire()
+                    state.bullet.render(stdscr)
             elif curr_key in STOP_INPUTS:
                 player.speed = 0
             elif curr_key in LEFT_INPUTS:
@@ -407,8 +425,9 @@ def game_loop(stdscr: Window) -> None:
             player.speed = 0
             # handle player actions
             if curr_key == Control.FIRE and state.bullet is None:
-                state.bullet = player.fire()
-                state.bullet.render(stdscr)
+                if state.can_fire():
+                    state.bullet = player.fire()
+                    state.bullet.render(stdscr)
             elif curr_key in LEFT_INPUTS:
                 player.x = max(1, player.x - 1)
             elif curr_key in RIGHT_INPUTS:
@@ -474,6 +493,8 @@ def game_loop(stdscr: Window) -> None:
 
             for column in Gestalt.hive_members:
                 for member in reversed(column):
+                    if member is None:
+                        continue
                     if member.y + member.h < barrier.y:
                         continue
                     if barrier.impacted_by(member):
@@ -523,6 +544,9 @@ def game_loop(stdscr: Window) -> None:
 
         # update the gestalt, so they cover the barriers if wiping
         Gestalt.render_all(stdscr)
+
+        for kill in state.last_kills:
+            kill.render(stdscr)
 
         # refresh the screen
         stdscr.refresh()
