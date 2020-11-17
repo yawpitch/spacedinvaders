@@ -546,15 +546,15 @@ class Gestalt(Moveable):
         raise RuntimeError(f"{self} -> {new_position} @ {limit}")
 
     @classmethod
-    def render_all(cls, stdscr: Window) -> None:
+    def render_all(cls, stdscr: Window, ranks_below: int = 0) -> None:
         """
-        Render the hive.
+        Render the hive, if only the ranks below a given index.
         """
         for col in cls.hive_members:
             while col and col[-1] is None:
                 col.pop()
-            for member in col:
-                if member:
+            for idx, member in enumerate(col):
+                if idx >= ranks_below and member:
                     member.render(stdscr)
 
     @classmethod
@@ -958,6 +958,7 @@ class Squid(Invader):
     DEATH: Icon = make_icon(
         """
         ⟫╳⟪
+        ⠈ ⠁
         """
     )
 
@@ -985,6 +986,7 @@ class Crab(Invader):
     DEATH: Icon = make_icon(
         """
         ⟫╳⟪
+        ⠈ ⠁
         """
     )
 
@@ -1012,6 +1014,7 @@ class Octopus(Invader):
     DEATH: Icon = make_icon(
         """
         ⟫╳⟪
+        ⠈ ⠁
         """
     )
 
@@ -1041,6 +1044,13 @@ class Mystery(Alien):
         super().__init__(*args, **kwargs)
         self._reached_wall = False
         self._sound = Sound.MYSTERY.play()
+
+    def silence(self) -> None:
+        """
+        Kills any sound that's playing for this ship.
+        """
+        if self._sound.is_playing():
+            self._sound.stop()
 
     def points(self, shot_count: int) -> int:
         """
@@ -1086,8 +1096,7 @@ class Mystery(Alien):
         """
         Kill this Mystery ship.
         """
-        if self._sound.is_playing():
-            self._sound.stop()
+        self.silence()
         self.color = Color.RED
         self.speed = 0
         if not self.reached_wall():

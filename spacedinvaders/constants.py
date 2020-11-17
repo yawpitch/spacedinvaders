@@ -60,7 +60,7 @@ class Control(IntEnum):
         return command == cls.RARR or command == cls.RKEY
 
     @staticmethod
-    def has_komando(cls, last10: Deque[Control]) -> bool:
+    def has_komando(last10: Deque[Control]) -> bool:
         """
         Check if the player has komando'd.
         """
@@ -84,3 +84,15 @@ class Direction(IntFlag):
     EAST = auto()
     SOUTH = auto()
     WEST = auto()
+
+
+class Stage(IntFlag):
+    """
+    Stages of play.
+    """
+    REDRAW = auto()
+    SPAWN = auto()
+    RUNNING = auto()
+    DEATH = auto()
+    WIN = auto()
+    GAME_OVER = auto()

@@ -14,7 +14,7 @@ from random import randint
 from typing import List, Tuple, Optional
 
 # local imports
-from .constants import Color, Control, Direction
+from .constants import Color, Control, Direction, Stage
 from .units import *
 from .utils import colorize, fit_within
 from .sounds import Sound
@@ -36,6 +36,65 @@ if ARENA_HEIGHT % 2:
     ARENA_HEIGHT += 1
 
 
+from .utils import regularize
+
+G = regularize(
+    """
+ ▄▄▄▖
+▐  ▄▖
+▝▄▄▟▌
+"""
+).splitlines()
+
+A = regularize(
+    """
+ ▄▄▄
+▐▃▃▃▌
+▐   ▌
+"""
+).splitlines()
+
+M = regularize(
+    """
+▗   ▖
+▐▙ ▟▌
+▐ ▀ ▌
+"""
+).splitlines()
+
+E = regularize(
+    """
+▗▄▄▄▖
+▐▃▃▃
+▐▄▄▄▖
+"""
+).splitlines()
+
+O = regularize(
+    """
+ ▄▄▄
+▐   ▌
+▝▄▄▄▘
+"""
+).splitlines()
+
+V = regularize(
+    """
+▗   ▖
+▐   ▌
+ ▜▄▛
+"""
+).splitlines()
+
+R = regularize(
+    """
+▗▄▄▄
+▐▃▃▃▘
+▐   ▌
+"""
+).splitlines()
+
+
 class PlayState:
     """
     Class to track the current game state.
@@ -47,7 +106,25 @@ class PlayState:
         self._score: int = 0
         self._high: int = 0
         self._lives: int = 3
-        self._handling_death: bool = False
+        self._stage: Stage = Stage.REDRAW
+        self._respawn_delay: int = round(1.5 * FRAMERATE)
+        self._credits: int = 0
+        self._bullet: Optional[Bullet] = None
+        self._bullet_count: int = 0
+        self._bullet_delay: int = 0
+        self._mystery: Optional[Mystery] = None
+        self._mystery_frame: Optional[int] = 35 * FRAMERATE
+        self._last_kills: List[Gestalt] = []
+        self.last10 = deque(maxlen=10)
+        self.egged = False
+
+    def reset(self):
+        self._screen: int = 0
+        self._frame: int = 0
+        self._score: int = 0
+        self._high: int = 0
+        self._lives: int = 3
+        self._stage: Stage = Stage.REDRAW
         self._respawn_delay: int = round(1.5 * FRAMERATE)
         self._credits: int = 0
         self._bullet: Optional[Bullet] = None
@@ -73,6 +150,7 @@ class PlayState:
         """
         self._screen = val
         self._frame = 0
+        self._stage = Stage.REDRAW
         self._bullet = None
         self._bullet_count = 0
         self._bullet_delay = 0
@@ -114,7 +192,7 @@ class PlayState:
         old_score = self._score
         self._score = val
         if old_score <= 1500 <= self._score:
-            self.lives += 1
+            state.lives += 1
         self.high = max(self.high, self._score)
 
     @property
@@ -149,20 +227,20 @@ class PlayState:
         self._lives = max(0, min(val, 4))
 
     @property
-    def handling_death(self) -> bool:
+    def stage(self) -> Stage:
         """
-        Are we currently handling a death?
+        Current stage in the game.
         """
-        return self._handling_death
+        return self._stage
 
-    @handling_death.setter
-    def handling_death(self, new: bool):
+    @stage.setter
+    def stage(self, new_stage: Stage):
         """
-        Reset the death handling flag.
+        Update the game stage.
         """
-        if not new:
-            self._respawn_delay += round(1.5 * FRAMERATE)
-        self._handling_death = False
+        if new_stage is Stage.SPAWN:
+            self._respawn_delay = round(1.5 * FRAMERATE)
+        self._stage = new_stage
 
     def can_spawn(self) -> bool:
         """
@@ -211,7 +289,7 @@ class PlayState:
         """
         Starting y position for the invaders, from screen top.
         """
-        return [8, 10, 14, 18, 18, 18, 20, 20, 20][self.screen % 10]
+        return [8, 10, 14, 18, 18, 18, 20, 20, 20][self.screen % 9]
 
     def can_fire(self) -> bool:
         """
@@ -414,7 +492,7 @@ def draw_hud(stdscr: Window, height: Row, width: Col, state: PlayState) -> None:
         stdscr.addstr(
             bar_y,
             width // 2,
-            str(state.mystery_frame),
+            f"{state.stage}",
             curses.A_BOLD,
         )
 
@@ -434,7 +512,11 @@ def game_loop(stdscr: Window) -> None:
     state = PlayState()
 
     last_time = None
-    last_screen = None
+    redraw_ranks_below = 4
+    typeon_game_over = 1
+
+    # spawn the player
+    player = Player(state.player_start_x, height - state.player_start_y, speed=0)
 
     # loop where curr_key is the last character pressed or -1 on no input
     while (curr_key := stdscr.getch()) != Control.QUIT:
@@ -446,13 +528,6 @@ def game_loop(stdscr: Window) -> None:
             time.sleep(delay)
         last_time = time.time()
 
-        # update the last 10
-        if not state.egged and curr_key != Control.NULL:
-            state.last10.append(curr_key)
-            if curr_key == Control.LKEY and Control.has_komando(state.last10):
-                state.credits += 10
-                state.egged = True
-
         # handle terminal resize events
         if curr_key == curses.KEY_RESIZE:
             resize_arena(stdscr, reflow=True)
@@ -461,31 +536,101 @@ def game_loop(stdscr: Window) -> None:
             stdscr.clear()
             stdscr.refresh()
 
+        # update the last 10
+        if not state.egged and curr_key != Control.NULL:
+            state.last10.append(curr_key)
+            if curr_key == Control.LKEY:
+                if Control.has_komando(state.last10):
+                    state.credits += 10
+                    state.egged = True
+
+        # if we're currently handling a player win, pause and level up
+        if state.stage is Stage.WIN and state.bullet is None:
+            curr_key = Control.NULL
+            curses.delay_output(1250)
+            player.x = state.player_start_x
+            stdscr.clear()
+            stdscr.refresh()
+            state.screen += 1
+            redraw_ranks_below = 4
+            state.stage = Stage.REDRAW
+
+        # if we're currently handling a player death, pause everything
+        if state.stage is Stage.DEATH and state.bullet is None:
+            curr_key = Control.NULL
+            if state.lives:
+                delay = 0
+                while not player.reap():
+                    curses.delay_output(1)
+                    delay += 1
+                stdscr.refresh()
+                curses.delay_output(850 - delay)
+                player.resurrect(state.player_start_x)
+                state.stage = Stage.SPAWN
+            else:
+                state.stage = Stage.GAME_OVER
+
+        # if we're currently at game over, start typing...
+        if state.stage is Stage.GAME_OVER and state.bullet is None:
+            if state.mystery:
+                state.mystery.silence()
+                state.mystery = None
+
+            message = [G, A, M, E, ["  ", "  ", "  "], O, V, E, R]
+            message_len = round(sum(len(c[0]) for c in message) / 2)
+            x_pos = center_x - message_len
+            for letter in message[:typeon_game_over]:
+                for idx, line in enumerate(letter):
+                    with colorize(stdscr, Color.RED if idx < 2 else Color.WHITE):
+                        stdscr.addstr(4 + idx, x_pos, line)
+                x_pos += len(line)
+                if typeon_game_over < message_len:
+                    curses.delay_output(10)
+
+            if typeon_game_over == message_len:
+                curses.delay_output(1000)
+                curses.flushinp()
+                stdscr.timeout(-1)
+                while stdscr.getch():
+                    raise SystemExit("Game Over")
+            else:
+                typeon_game_over += 1
+
         # erase the screen for redraw
-        stdscr.erase()
+        if state.stage is not Stage.GAME_OVER:
+            stdscr.erase()
 
-        # starting a new screen
-        if last_screen is None or state.screen != last_screen:
+        # if we're starting a new screen, redraw everything
+        if state.stage is Stage.REDRAW:
 
-            # spawn the player
-            player = Player(
-                state.player_start_x, height - state.player_start_y, speed=0
-            )
+            # blank the screen to simulate a CRT redraw
+            if redraw_ranks_below == 4:
+                stdscr.clear()
+                stdscr.refresh()
+                curses.delay_output(18)
+            elif redraw_ranks_below == 3:
+                curses.delay_output(5)
+
             # place the barriers
             barriers = []
             barrier_x = round(BARRIER_WIDTH * 1.5)
-            barrier_y = height - BARRIER_HEIGHT - state.player_start_y - 1
+            barrier_y = player.y - player.h - BARRIER_HEIGHT
             for idx in range(4):
                 barriers.append(Barrier(barrier_x, barrier_y))
                 barrier_x += BARRIER_WIDTH * 2
 
             # place the vaders
-            Gestalt.populate(state.invaders_start_x, state.invaders_start_y)
-            last_screen = state.screen
+            if redraw_ranks_below == 4:
+                Gestalt.populate(state.invaders_start_x, state.invaders_start_y)
+            elif redraw_ranks_below == 0:
+                state.stage = Stage.SPAWN
 
-        # handle player actions; delay for respawn
-        player.speed = 0
-        if state.can_spawn() and not state.handling_death:
+        # don't move to running state during spawn delay
+        if state.stage is Stage.SPAWN and state.can_spawn():
+            state.stage = Stage.RUNNING
+
+        # if we're runing after player respawn, handle player actions
+        if state.stage is Stage.RUNNING:
             if curr_key == Control.FIRE and state.bullet is None:
                 if state.can_fire():
                     state.bullet = player.fire()
@@ -495,8 +640,11 @@ def game_loop(stdscr: Window) -> None:
             elif Control.is_right(curr_key):
                 player.x = min(width - player.w - 1, player.x + 1)
 
-        # pause invader and player movements during death
-        if not state.handling_death:
+            # move the player
+            player.move(stdscr, state.frame, width, height)
+
+        # aliens move even if the player is spawning, but pause for death, etc
+        if state.stage in Stage.SPAWN | Stage.RUNNING:
             # launch the mystery ship
             if state.mystery_frame <= 0 and not Gestalt.superboom():
                 if Gestalt.remaining() <= 8:
@@ -504,35 +652,51 @@ def game_loop(stdscr: Window) -> None:
                 else:
                     state.mystery = Mystery.spawn(1, 3, width, state.bullet_count)
 
-            # move the player
-            player.move(stdscr, state.frame, width, height)
-
-            # move the invaders
-            Gestalt.lockstep(stdscr, state.frame, width, height, player.x, state.score)
-            # move the mystery ship, if any
+            # move the mystery ship, if any has been launched
             if state.mystery and not state.mystery.is_dead():
                 state.mystery.move(stdscr, state.frame, width, height)
 
-        # projectiles carry on their merry way during death handling
+            # move the invaders
+            Gestalt.lockstep(stdscr, state.frame, width, height, player.x, state.score)
 
-        # move the bullet, if any
+        # the bullet will carry on its merry way even during death handling
         if state.bullet and not state.bullet.is_dead():
             state.bullet.move(stdscr, state.frame, width, height)
 
-        # move any bombs dropped by the gestalt
-        for bomb in Gestalt.hive_dropped:
-            bomb.move(stdscr, state.frame, width, height)
+        # clear bombs from previous frames on redraw
+        if state.stage is Stage.REDRAW:
+            Gestalt.hive_dropped.clear()
 
-        # however collisions end during death throes
+        # during spawn the gestalt can't fire on or near the player
+        if state.stage is Stage.SPAWN:
+            Gestalt.hive_dropped = [
+                b
+                for b in Gestalt.hive_dropped
+                if b.x >= player.x + round(2.5 * player.w)
+            ]
 
-        if not state.handling_death:
+        # bombs will fall except in death
+        if state.stage not in Stage.DEATH | Stage.GAME_OVER:
+            for bomb in Gestalt.hive_dropped:
+                bomb.move(stdscr, state.frame, width, height)
+
+        # all collisions end during death throes
+        if state.stage not in Stage.DEATH | Stage.GAME_OVER:
+
+            # handle succesful player shots
+            has_kill = Gestalt.find_collision(state.bullet) if state.bullet else None
+            if has_kill:
+                state.score += has_kill.points(state.bullet_count)
+                state.last_kills.append(has_kill)
+                state.bullet = None
+
+            # handle end of the gestalt
+            if Gestalt.remaining() == 0:
+                state.stage = Stage.WIN
 
             # handle bomb interactions with the player
             # note that bombs don't effect the player below the "invasion" row
             for bomb in Gestalt.hive_dropped:
-                # don't effect the player during respawn
-                if state.handling_death or not state.can_spawn():
-                    break
                 if bomb.dropped_from >= barrier_y + BARRIER_HEIGHT - 3:
                     continue
                 if state.bullet and bomb.impacted_by(state.bullet):
@@ -546,13 +710,7 @@ def game_loop(stdscr: Window) -> None:
                 if not bomb.is_dead() and player.impacted_by(bomb):
                     player.die()
                     state.lives -= 1
-
-            # handle succesful player shots
-            has_kill = Gestalt.find_collision(state.bullet) if state.bullet else None
-            if has_kill:
-                state.score += has_kill.points(state.bullet_count)
-                state.last_kills.append(has_kill)
-                state.bullet = None
+                    state.stage = Stage.DEATH
 
             # handle the mystery ship's collisions
             if state.mystery:
@@ -590,19 +748,12 @@ def game_loop(stdscr: Window) -> None:
                     struck.add(idx)
                     break
 
-            # render the barrier if it's had no collisions this round
-            if not barrier.struck:
-                barrier.render(stdscr)
-
         for idx in sorted(struck, reverse=True):
             barrier = barriers[idx]
             barrier.degrade()
             # the barrier may have been eliminated from play
             if barrier.is_devastated():
                 barriers.pop(idx)
-            else:
-                # render the barrier
-                barrier.render(stdscr)
 
         # reap a dead bullet
         if state.bullet and (state.bullet.impacted or state.bullet.reap()):
@@ -621,15 +772,17 @@ def game_loop(stdscr: Window) -> None:
         if state.mystery and state.mystery.reap():
             state.mystery = None
 
-        # reap the player and resurrect
-        if player.is_dead() and player.reap():
-            player.resurrect(state.player_start_x)
-
         # render the mystery ship, if any
         if state.mystery:
             state.mystery.render(stdscr)
 
+        # render the barriers
+        for barrier in barriers:
+            barrier.render(stdscr)
+
         # render any remaining bombs
+        # if not rendered after the barriers the bomb's disappear
+        # when travelling through destroyed sections
         for bomb in Gestalt.hive_dropped:
             if bomb.y > barrier_y - 1:
                 bomb.color = Color.GREEN
@@ -640,13 +793,18 @@ def game_loop(stdscr: Window) -> None:
             state.bullet.render(stdscr)
 
         # render the gestalt, so they cover the barriers if wiping
-        Gestalt.render_all(stdscr)
+        if state.stage is Stage.REDRAW:
+            Gestalt.render_all(stdscr, ranks_below=redraw_ranks_below)
+            if state.frame % 2:
+                redraw_ranks_below -= 1
+        else:
+            Gestalt.render_all(stdscr)
 
         for kill in state.last_kills:
             kill.render(stdscr)
 
         # render the player, if not respawning
-        if player.is_dead() or state.can_spawn():
+        if state.stage not in Stage.REDRAW | Stage.SPAWN:
             player.render(stdscr)
 
         # update the HUD
@@ -654,11 +812,6 @@ def game_loop(stdscr: Window) -> None:
 
         # refresh the screen
         stdscr.refresh()
-
-        # pause everything on death
-        if state.handling_death:
-            curses.delay_output(850)
-            state.handling_death = False
         state.frame += 1
 
 
