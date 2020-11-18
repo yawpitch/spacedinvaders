@@ -15,6 +15,7 @@ from typing import ByteString, Dict, List, Optional, Set, Tuple
 
 # local imports
 from spacedinvaders.constants import Color, Direction
+from spacedinvaders.exceptions import SuccessfulInvasion
 from spacedinvaders.utils import regularize, colorize
 from spacedinvaders.sounds import Sound
 
@@ -42,7 +43,7 @@ class Renderable:
     # the icon that will be drawn for this unit
     ICON: Icon
 
-    def __init__(self, x: int, y: int):
+    def __init__(self, x: int, y: int, *args, **kwargs):
         self._x: int = x
         self._y: int = y
         split = self.ICON.splitlines()
@@ -169,6 +170,23 @@ class Renderable:
         self._dirty = False
 
 
+class Audible:
+    """
+    Mixin that allows units to have sounds.
+    """
+
+    def __init__(self, *args, use_sound: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._use_sound = use_sound
+
+    @property
+    def use_sound(self) -> bool:
+        """
+        Check if the unit's sounds should play.
+        """
+        return self._use_sound
+
+
 class Reskinable:
     """
     Mixin that allows a unit to be reskinned on move.
@@ -198,8 +216,8 @@ class Killable:
     # icon to present on death
     DEATH: Icon
 
-    def __init__(self, *args):
-        super().__init__(*args)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._time_of_death: Optional[float] = None
 
     @property
@@ -243,8 +261,8 @@ class Moveable:
 
     WALL_BUFFER = 5
 
-    def __init__(self, *args, speed: int = 1):
-        super().__init__(*args)
+    def __init__(self, *args, speed: int = 1, **kwargs):
+        super().__init__(*args, **kwargs)
         self._direction = Direction.EAST
         self._speed = speed
 
@@ -336,7 +354,7 @@ class Moveable:
         raise NotImplementedError("Subclass must implement")
 
 
-class Gestalt(Moveable):
+class Gestalt(Moveable, Audible):
     """
     Moveables that act as one.
     """
@@ -353,6 +371,7 @@ class Gestalt(Moveable):
     hive_speed: int = 1
     hive_turned: bool = False
     hive_dropped: List[Bomb] = []
+    hive_use_sound: bool = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -363,10 +382,15 @@ class Gestalt(Moveable):
         Gestalt.hive_members[col][row] = self
 
     @classmethod
-    def populate(cls, x: int, y: int, *, x_sep: int = 2, y_sep: int = 1) -> None:
+    def populate(
+        cls, x: int, y: int, *, x_sep: int = 2, y_sep: int = 1, use_sound: bool = True
+    ) -> None:
         """
         Populate the Gestalt.
         """
+        # optionally turn off hive audio
+        Gestalt.hive_use_sound = use_sound
+
         # clear any existing hive
         for col in Gestalt.hive_members:
             col.clear()
@@ -378,7 +402,7 @@ class Gestalt(Moveable):
             x_pos = x
             species = Squid if row < 1 else Crab if row < 3 else Octopus
             for col in range(cls.COLUMNS):
-                vader = species(x_pos, y_pos, speed=1)
+                vader = species(x_pos, y_pos, speed=1, use_sound=use_sound)
                 x_pos += vader.w + x_sep
             y_pos += vader.h + y_sep
 
@@ -463,6 +487,7 @@ class Gestalt(Moveable):
             return None
 
         members = Gestalt.hive_members
+        have_invaded = False
 
         no_turn = True
         # by default search west to east
@@ -525,7 +550,10 @@ class Gestalt(Moveable):
                         member.x += 1
                 member.move(stdscr, frame, width, height)
 
-                # drop the bomb from the bottommost member
+                if member.y + member.h >= height - 3:
+                    have_invaded = True
+
+                # drop the bomb from the bottom-most member
                 if col == sight and idx == 0:
                     away = bomb(
                         (member.x + member.x + member.w) // 2,
@@ -535,7 +563,12 @@ class Gestalt(Moveable):
                     away.render(stdscr)
                     cls.hive_dropped.insert(0, away)
 
-        Sound.INVADER_4.play()
+
+        if have_invaded:
+            raise SuccessfulInvasion(member)
+
+        if cls.hive_use_sound:
+            Sound.INVADER_4.play()
         cls.hive_moves += 1
 
     def wall(self, new_position: int, limit: int) -> int:
@@ -568,7 +601,8 @@ class Gestalt(Moveable):
                 if candidate is None:
                     continue
                 if candidate.impacted_by(bullet):
-                    Sound.KILLSHOT.play()
+                    if cls.hive_use_sound:
+                        Sound.KILLSHOT.play()
                     candidate.color = Color.RED
                     candidate.die()
                     column[row] = None
@@ -612,7 +646,7 @@ class Collidable:
     """
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args)
+        super().__init__(*args, **kwargs)
         self._struck: List[Collidable] = []
         self._impacted = False
 
@@ -695,7 +729,7 @@ class Destructible(Collidable):
     """
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args)
+        super().__init__(*args, **kwargs)
         self._state: List[List[str]] = [list(r) for r in self.icon.splitlines()]
         self._devastated: Dict[str, Set[int]] = {"rows": set(), "cols": set()}
 
@@ -854,7 +888,7 @@ class Bullet(Moveable, Collidable, Killable, Renderable):
         super().die()
 
 
-class Player(Moveable, Collidable, Killable, Renderable):
+class Player(Moveable, Collidable, Killable, Audible, Renderable):
     """
     The player's unit.
     """
@@ -890,7 +924,8 @@ class Player(Moveable, Collidable, Killable, Renderable):
         Fire a Bullet upwards, if enough time has elapsed
         since the last shot.
         """
-        Sound.SHOOT.play()
+        if self.use_sound:
+            Sound.SHOOT.play()
         return Bullet((self.x + (self.x + self.w)) // 2, self.y - 1, speed=3)
 
     def die(self) -> None:
@@ -898,7 +933,8 @@ class Player(Moveable, Collidable, Killable, Renderable):
         Die a death!
         """
         self.speed = 0
-        Sound.EXPLOSION.play()
+        if self.use_sound:
+            Sound.EXPLOSION.play()
         super().die()
 
     def resurrect(self, x: int):
@@ -927,7 +963,7 @@ class Collectible:
         return self.POINTS
 
 
-class Alien(Moveable, Collidable, Killable, Collectible, Renderable):
+class Alien(Moveable, Collidable, Killable, Collectible, Audible, Renderable):
     ...
 
 
@@ -1043,13 +1079,14 @@ class Mystery(Alien):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._reached_wall = False
-        self._sound = Sound.MYSTERY.play()
+        if self.use_sound:
+            self._sound = Sound.MYSTERY.play()
 
     def silence(self) -> None:
         """
         Kills any sound that's playing for this ship.
         """
-        if self._sound.is_playing():
+        if self.use_sound and self._sound.is_playing():
             self._sound.stop()
 
     def points(self, shot_count: int) -> int:
@@ -1103,12 +1140,14 @@ class Mystery(Alien):
             super().die()
 
     @classmethod
-    def spawn(cls, x: int, y: int, width: int, shot_count: int) -> Mystery:
+    def spawn(
+        cls, x: int, y: int, width: int, shot_count: int, use_sound: bool = True
+    ) -> Mystery:
         """
         Spawn a new Mystery ship.
         """
         on_right = shot_count % 2 == 0
-        mystery = Mystery(x, y, speed=1)
+        mystery = Mystery(x, y, speed=1, use_sound=use_sound)
         mystery.x = width - x - mystery.w if on_right else mystery.x
         mystery.direction = Direction.WEST if on_right else Direction.EAST
         return mystery

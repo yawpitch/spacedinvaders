@@ -4,28 +4,33 @@
 A textual, terminal spin on an arcade classic.
 """
 # stdlib imports
+import argparse
 import curses
 import locale
 import math
 import os
 import time
 from collections import deque
+from functools import partial
 from random import randint
-from typing import List, Tuple, Optional
+from textwrap import dedent, indent
+from typing import BinaryIO, List, Tuple, Optional
 
 # local imports
+from .annotations import Window, Row, Col
 from .constants import Color, Control, Direction, Stage
+from .exceptions import SuccessfulInvasion
+from .letters import A, C, D, E, G, I, M, N, O, P, R, S, V
 from .units import *
 from .utils import colorize, fit_within
-from .sounds import Sound
-from .annotations import Window, Row, Col
 
 locale.setlocale(locale.LC_ALL, "")
 
 CODEC = locale.getpreferredencoding()
+VERSION = "0.0.1"
 FRAMERATE = 60
 
-# Constnats that represent the screen dimensions
+# Constants that represent the screen dimensions
 ARCADE_ASPECT = 256 / 224
 PIXEL_ASPECT = 2.0
 BARRIER_WIDTH = len(Barrier.ICON.splitlines()[0])
@@ -36,63 +41,11 @@ if ARENA_HEIGHT % 2:
     ARENA_HEIGHT += 1
 
 
-from .utils import regularize
-
-G = regularize(
-    """
- ▄▄▄▖
-▐  ▄▖
-▝▄▄▟▌
-"""
-).splitlines()
-
-A = regularize(
-    """
- ▄▄▄
-▐▃▃▃▌
-▐   ▌
-"""
-).splitlines()
-
-M = regularize(
-    """
-▗   ▖
-▐▙ ▟▌
-▐ ▀ ▌
-"""
-).splitlines()
-
-E = regularize(
-    """
-▗▄▄▄▖
-▐▃▃▃
-▐▄▄▄▖
-"""
-).splitlines()
-
-O = regularize(
-    """
- ▄▄▄
-▐   ▌
-▝▄▄▄▘
-"""
-).splitlines()
-
-V = regularize(
-    """
-▗   ▖
-▐   ▌
- ▜▄▛
-"""
-).splitlines()
-
-R = regularize(
-    """
-▗▄▄▄
-▐▃▃▃▘
-▐   ▌
-"""
-).splitlines()
+def get_db():
+    os.environ.get("SPACEDINVADERS_DATA_HOME")
+    os.path.expandvars(
+        os.path.expanduser(os.environ.get("XDG_DATA_HOME", "~/.local/share"))
+    )
 
 
 class PlayState:
@@ -101,24 +54,6 @@ class PlayState:
     """
 
     def __init__(self):
-        self._screen: int = 0
-        self._frame: int = 0
-        self._score: int = 0
-        self._high: int = 0
-        self._lives: int = 3
-        self._stage: Stage = Stage.REDRAW
-        self._respawn_delay: int = round(1.5 * FRAMERATE)
-        self._credits: int = 0
-        self._bullet: Optional[Bullet] = None
-        self._bullet_count: int = 0
-        self._bullet_delay: int = 0
-        self._mystery: Optional[Mystery] = None
-        self._mystery_frame: Optional[int] = 35 * FRAMERATE
-        self._last_kills: List[Gestalt] = []
-        self.last10 = deque(maxlen=10)
-        self.egged = False
-
-    def reset(self):
         self._screen: int = 0
         self._frame: int = 0
         self._score: int = 0
@@ -488,16 +423,52 @@ def draw_hud(stdscr: Window, height: Row, width: Col, state: PlayState) -> None:
         stdscr.addstr(bar_y, width - 1 - len(label + creds), label, curses.A_DIM)
         stdscr.addstr(bar_y, width - 1 - len(creds), creds, curses.A_BOLD)
 
-    with colorize(stdscr, Color.BLUE):
-        stdscr.addstr(
-            bar_y,
-            width // 2,
-            f"{state.stage}",
-            curses.A_BOLD,
-        )
+    debug = f""
+    if debug:
+        with colorize(stdscr, Color.BLUE):
+            stdscr.addstr(
+                bar_y,
+                width // 2 - len(debug) // 2,
+                debug,
+                curses.A_BOLD,
+            )
 
 
-def game_loop(stdscr: Window) -> None:
+Letter = List[str]
+
+
+def typeon(
+    stdscr: Window,
+    center_x: int,
+    start_y: int,
+    message: List[Letter],
+    up_to: int,
+    *,
+    delay: int = 10,
+) -> int:
+    """
+    Type on the given big type message, up to the given character.
+    Returns a tuple of the number of letters to display and the number of
+    letters actually displayed.
+    """
+    length = len(message)
+    x_pos = center_x - round(sum(len(c[0]) for c in message) / 2)
+    for letter_count, letter in enumerate(message[:up_to], start=1):
+        for line_idx, line in enumerate(letter):
+            with colorize(stdscr, Color.RED if line_idx < 2 else Color.WHITE):
+                stdscr.addstr(start_y + line_idx, x_pos, line)
+        x_pos += len(line)
+        if letter_count == up_to and letter_count != length:
+            curses.delay_output(delay)
+    return length, letter_count
+
+
+def mainloop(
+    stdscr: Window, *, use_sound: bool = True, dump_file: Optional[BinaryIO] = None
+) -> None:
+    """
+    The main game loop; prepares the screen and coordinates play stages.
+    """
 
     # prepare the screen
     initialize_screen(stdscr)
@@ -513,10 +484,18 @@ def game_loop(stdscr: Window) -> None:
 
     last_time = None
     redraw_ranks_below = 4
+    attract_frame = 0
+    typeon_spaced = typeon_invaders = 1
+    typeon_advance_table = 0
     typeon_game_over = 1
 
     # spawn the player
-    player = Player(state.player_start_x, height - state.player_start_y, speed=0)
+    player = Player(
+        state.player_start_x,
+        height - state.player_start_y,
+        speed=0,
+        use_sound=use_sound,
+    )
 
     # loop where curr_key is the last character pressed or -1 on no input
     while (curr_key := stdscr.getch()) != Control.QUIT:
@@ -527,6 +506,97 @@ def game_loop(stdscr: Window) -> None:
         if delay > 0:
             time.sleep(delay)
         last_time = time.time()
+
+        if False:
+
+            stdscr.erase()
+            start_y = center_y - 12
+
+            if 20 <= attract_frame % FRAMERATE <= 55:
+                message = "PRESS SPACE TO PLAY"
+                start_x = center_x - round(len(message) / 2)
+                with colorize(stdscr, Color.WHITE):
+                    for word in message.split():
+                        attrs = curses.A_BOLD if word == "SPACE" else curses.A_DIM
+                        stdscr.addstr(start_y, start_x, word, attrs)
+                        start_x += len(word) + 1
+
+            start_y += 2
+            spaced = [S, P, A, C, E, D]
+            spaced_count, spaced_typed = typeon(
+                stdscr, center_x, start_y, spaced, typeon_spaced, delay=50
+            )
+
+            if spaced_count == spaced_typed:
+                invaders = [I, N, V, A, D, E, R, S]
+                invaders_count, invaders_typed = typeon(
+                    stdscr, center_x, start_y + 3, invaders, typeon_invaders, delay=50
+                )
+                typeon_invaders += 1
+
+            typeon_spaced += 1
+
+            if attract_frame == 0:
+                typeon_advance_table = 0
+
+            if attract_frame > round(FRAMERATE * 0.65):
+                start_y += 9
+                end_w = 35
+                message = "SCORE ADVANCE TABLE".center(end_w)
+                start_x = center_x - round(len(message) / 2)
+                with colorize(stdscr, Color.WHITE):
+                    stdscr.addstr(
+                        start_y,
+                        start_x,
+                        message,
+                        curses.A_DIM | curses.A_BOLD | curses.A_STANDOUT,
+                    )
+
+                table = [
+                    (Mystery.ICON.splitlines(), Mystery.COLOR, "? MYSTERY"),
+                    (Squid.ICON.splitlines(), Color.WHITE, f"{Squid.POINTS} POINTS"),
+                    (Crab.ICON.splitlines(), Color.WHITE, f"{Crab.POINTS} POINTS"),
+                    (
+                        Octopus.ICON.splitlines(),
+                        Color.YELLOW,
+                        f"{Octopus.POINTS} POINTS",
+                    ),
+                ]
+
+                if (
+                    attract_frame > round(FRAMERATE * 0.85)
+                    and attract_frame % FRAMERATE == 40
+                ):
+                    typeon_advance_table += 1
+
+                start_y += 2
+                pad_x = max([len(i[0][0]) for i in table])
+                for critter_idx, (icon, color, points) in enumerate(
+                    table[:typeon_advance_table]
+                ):
+                    for idx, line in enumerate(icon):
+                        with colorize(stdscr, color):
+                            stdscr.addstr(
+                                start_y + idx, start_x + 2, line.center(pad_x)
+                            )
+                        if (critter_idx == 0 and idx == 1) or (
+                            critter_idx and idx == 0
+                        ):
+                            with colorize(
+                                stdscr, Color.WHITE if color != Color.YELLOW else color
+                            ):
+                                stdscr.addstr(
+                                    start_y + idx,
+                                    start_x + end_w - len(points) - 2,
+                                    points,
+                                )
+                    start_y += len(icon)
+                    if 0 < critter_idx:
+                        start_y += 1
+
+            stdscr.refresh()
+            attract_frame = (attract_frame + 1) % (FRAMERATE * 30)
+            continue
 
         # handle terminal resize events
         if curr_key == curses.KEY_RESIZE:
@@ -577,19 +647,14 @@ def game_loop(stdscr: Window) -> None:
                 state.mystery = None
 
             message = [G, A, M, E, ["  ", "  ", "  "], O, V, E, R]
-            message_len = round(sum(len(c[0]) for c in message) / 2)
-            x_pos = center_x - message_len
-            for letter in message[:typeon_game_over]:
-                for idx, line in enumerate(letter):
-                    with colorize(stdscr, Color.RED if idx < 2 else Color.WHITE):
-                        stdscr.addstr(4 + idx, x_pos, line)
-                x_pos += len(line)
-                if typeon_game_over < message_len:
-                    curses.delay_output(10)
+            letter_count, letters_typed = typeon(
+                stdscr, center_x, 4, message, typeon_game_over, delay=50
+            )
 
-            if typeon_game_over == message_len:
-                curses.delay_output(1000)
+            if letter_count == letters_typed:
                 curses.flushinp()
+                stdscr.refresh()
+                curses.delay_output(1000)
                 stdscr.timeout(-1)
                 while stdscr.getch():
                     raise SystemExit("Game Over")
@@ -621,7 +686,9 @@ def game_loop(stdscr: Window) -> None:
 
             # place the vaders
             if redraw_ranks_below == 4:
-                Gestalt.populate(state.invaders_start_x, state.invaders_start_y)
+                Gestalt.populate(
+                    state.invaders_start_x, state.invaders_start_y, use_sound=use_sound
+                )
             elif redraw_ranks_below == 0:
                 state.stage = Stage.SPAWN
 
@@ -650,14 +717,23 @@ def game_loop(stdscr: Window) -> None:
                 if Gestalt.remaining() <= 8:
                     state.mystery_frame = None
                 else:
-                    state.mystery = Mystery.spawn(1, 3, width, state.bullet_count)
+                    state.mystery = Mystery.spawn(
+                        1, 3, width, state.bullet_count, use_sound=use_sound
+                    )
 
             # move the mystery ship, if any has been launched
             if state.mystery and not state.mystery.is_dead():
                 state.mystery.move(stdscr, state.frame, width, height)
 
             # move the invaders
-            Gestalt.lockstep(stdscr, state.frame, width, height, player.x, state.score)
+            try:
+                Gestalt.lockstep(
+                    stdscr, state.frame, width, height, player.x, state.score
+                )
+            except SuccessfulInvasion:
+                player.die()
+                state.lives = 0
+                state.stage = Stage.DEATH
 
         # the bullet will carry on its merry way even during death handling
         if state.bullet and not state.bullet.is_dead():
@@ -683,7 +759,7 @@ def game_loop(stdscr: Window) -> None:
         # all collisions end during death throes
         if state.stage not in Stage.DEATH | Stage.GAME_OVER:
 
-            # handle succesful player shots
+            # handle successful player shots
             has_kill = Gestalt.find_collision(state.bullet) if state.bullet else None
             if has_kill:
                 state.score += has_kill.points(state.bullet_count)
@@ -816,7 +892,54 @@ def game_loop(stdscr: Window) -> None:
 
 
 def main() -> None:
-    curses.wrapper(game_loop)
+    """
+    CLI to the Spaced Invaders game.
+    """
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=dedent(
+            """
+        Play a game of Spaced Invaders.
+
+        Your console and font must support unicode characters.
+        If the following doesn't look like a UFO, then it is 
+        unlikely the game is going to work.
+
+        {icon}
+
+        Controls are pretty self-explanatory:
+
+            Move Left    A KEY or LEFT ARROW
+            Move Right   D KEY or RIGHT ARROW
+            Fire         SPACE
+            Quit         CTRL + Q
+    """
+        ).format(icon=indent(Mystery.ICON, " " * 8)),
+    )
+
+    # hidden option to dump out play state to file
+    # necessary for recording a new demo
+    parser.add_argument(
+        "--dump",
+        type=argparse.FileType("wb"),
+        help=argparse.SUPPRESS,
+    )
+
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        dest="use_sound",
+        action="store_false",
+        help="disable game sounds",
+    )
+    parser.add_argument(
+        "-V", "--version", action="version", version="%(prog)s " + VERSION
+    )
+
+    opts = parser.parse_args()
+
+    # start the game and clean up the screen on errors
+    curses.wrapper(partial(mainloop, use_sound=opts.use_sound, dump_file=opts.dump))
 
 
 if __name__ == "__main__":

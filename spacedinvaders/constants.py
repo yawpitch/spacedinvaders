@@ -90,6 +90,7 @@ class Stage(IntFlag):
     """
     Stages of play.
     """
+
     REDRAW = auto()
     SPAWN = auto()
     RUNNING = auto()
