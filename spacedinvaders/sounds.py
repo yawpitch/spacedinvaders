@@ -38,12 +38,7 @@ class Sound:
     """
 
     EXPLOSION = _load(_resource("media/explosion.wav"))
-    INVADER_1 = _load(_resource("media/fastinvader1.wav"))
-    INVADER_2 = _load(_resource("media/fastinvader2.wav"))
-    INVADER_3 = _load(_resource("media/fastinvader3.wav"))
-    INVADER_4 = _load(_resource("media/fastinvader4.wav"))
-    KILLSHOT = _load(_resource("media/invaderkilled.wav"))
+    INVADER = _load(_resource("media/invader.wav"))
+    KILLSHOT = _load(_resource("media/killshot.wav"))
     SHOOT = _load(_resource("media/shoot.wav"))
-    UFO_HIGH = _load(_resource("media/ufo_highpitch.wav"))
-    UFO_LOW = _load(_resource("media/ufo_lowpitch.wav"))
     MYSTERY = _load(_resource("media/mystery.wav"))

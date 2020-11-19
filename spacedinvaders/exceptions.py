@@ -4,8 +4,10 @@
 Exceptions used within the game.
 """
 
+
 class SuccessfulInvasion(Exception):
     """
     Raised if an invader reaches the player's row.
     """
+
     pass

@@ -11,7 +11,7 @@ import locale
 import time
 from curses import window
 from random import choice
-from typing import ByteString, Dict, List, Optional, Set, Tuple
+from typing import ByteString, Dict, List, Optional, Set, Tuple, Type, Union
 
 # local imports
 from spacedinvaders.constants import Color, Direction
@@ -22,7 +22,6 @@ from spacedinvaders.sounds import Sound
 CODEC = locale.getpreferredencoding()
 
 Icon = str
-Window = curses.window
 
 
 def make_icon(icon: Icon) -> Icon:
@@ -128,7 +127,7 @@ class Renderable:
         self._icon = new
 
     @property
-    def color(self) -> int:
+    def color(self) -> Color:
         """
         The color of this unit.
         """
@@ -150,7 +149,7 @@ class Renderable:
         """
         return self._dirty
 
-    def render(self, stdscr: Window) -> None:
+    def render(self, stdscr: window) -> None:
         """
         Render the unit to screen.
         """
@@ -170,7 +169,7 @@ class Renderable:
         self._dirty = False
 
 
-class Audible:
+class Audible(Renderable):
     """
     Mixin that allows units to have sounds.
     """
@@ -187,7 +186,7 @@ class Audible:
         return self._use_sound
 
 
-class Reskinable:
+class Reskinable(Renderable):
     """
     Mixin that allows a unit to be reskinned on move.
     """
@@ -198,7 +197,7 @@ class Reskinable:
         """
         Flips the unit's icon.
         """
-        if hasattr(self, "is_dead") and self.is_dead():
+        if isinstance(self, Killable) and self.is_dead():
             return None
         if self.icon is self.ICON:
             self.icon = self.ALT
@@ -206,7 +205,7 @@ class Reskinable:
             self.icon = self.ICON
 
 
-class Killable:
+class Killable(Renderable):
     """
     Mixin to allow a Renderable to be killed.
     """
@@ -249,12 +248,12 @@ class Killable:
         self.time_of_death = time.time()
 
     def reap(self) -> bool:
-        if self.is_dead():
+        if self.is_dead() and self.time_of_death is not None:
             return time.time() - self.time_of_death > self.REAP_DELAY
         return False
 
 
-class Moveable:
+class Moveable(Renderable):
     """
     Mixin to allow a Renderable to be moved.
     """
@@ -301,13 +300,7 @@ class Moveable:
         """
         self._direction = val
 
-    def turn(self, direction: Direction) -> Direction:
-        """
-        Turns the unit, returning its original direction.
-        """
-        self.direction = direction
-
-    def move(self, stdscr: Window, frame: int, width: int, height: int) -> None:
+    def move(self, stdscr: window, frame: int, width: int, height: int) -> None:
         """
         Moves the unit in the direction it's facing.
         Calls Moveable.wall(new_position, limit) near wall collisions.
@@ -364,7 +357,7 @@ class Gestalt(Moveable, Audible):
     TURN_BUFFER: int = 2
     COLUMNS: int = 11
     ROWS: int = 5
-    hive_members: List[List[Invader]] = []
+    hive_members: List[List[Optional[Invader]]] = []
     hive_moves: int = 0
     hive_direction: Direction = Direction.EAST
     hive_aboutface: Direction = Direction.WEST
@@ -401,21 +394,10 @@ class Gestalt(Moveable, Audible):
         for row in range(Gestalt.ROWS):
             x_pos = x
             species = Squid if row < 1 else Crab if row < 3 else Octopus
-            for col in range(cls.COLUMNS):
+            for _ in range(cls.COLUMNS):
                 vader = species(x_pos, y_pos, speed=1, use_sound=use_sound)
                 x_pos += vader.w + x_sep
             y_pos += vader.h + y_sep
-
-    @classmethod
-    def scootch(cls, x: int, y: int) -> None:
-        """
-        Shift the whole gestalt to a new position. Both x and y
-        are the relative values you want to move by, not absolutes.
-        """
-        for col in cls.hive_members:
-            for member in col:
-                member.x += x
-                member.y += y
 
     @property
     def speed(self) -> int:
@@ -470,7 +452,7 @@ class Gestalt(Moveable, Audible):
     @classmethod
     def lockstep(
         cls,
-        stdscr: Window,
+        stdscr: window,
         frame: int,
         width: int,
         height: int,
@@ -491,7 +473,7 @@ class Gestalt(Moveable, Audible):
 
         no_turn = True
         # by default search west to east
-        columns = range(len(members))
+        columns = list(range(len(members)))
         # reverse the search if the gestalt is moving east
         if cls.hive_direction is Direction.EAST:
             columns = sorted(columns, reverse=True)
@@ -505,7 +487,7 @@ class Gestalt(Moveable, Audible):
         # load a weapon, if we can fire
         if cls.hive_moves > 3 and can_sight and cls.can_drop(player_score):
             # determine what weapon to drop
-            arsenal = [Seeker]
+            arsenal: List[Type[Bomb]] = [Seeker]
             if not any(isinstance(b, SuperBomb) for b in cls.hive_dropped):
                 arsenal.append(SuperBomb)
             if count > 8:
@@ -554,7 +536,7 @@ class Gestalt(Moveable, Audible):
                     have_invaded = True
 
                 # drop the bomb from the bottom-most member
-                if col == sight and idx == 0:
+                if bomb and col == sight and idx == 0:
                     away = bomb(
                         (member.x + member.x + member.w) // 2,
                         member.y + 2,
@@ -563,12 +545,11 @@ class Gestalt(Moveable, Audible):
                     away.render(stdscr)
                     cls.hive_dropped.insert(0, away)
 
-
         if have_invaded:
             raise SuccessfulInvasion(member)
 
         if cls.hive_use_sound:
-            Sound.INVADER_4.play()
+            Sound.INVADER.play()
         cls.hive_moves += 1
 
     def wall(self, new_position: int, limit: int) -> int:
@@ -579,7 +560,7 @@ class Gestalt(Moveable, Audible):
         raise RuntimeError(f"{self} -> {new_position} @ {limit}")
 
     @classmethod
-    def render_all(cls, stdscr: Window, ranks_below: int = 0) -> None:
+    def render_all(cls, stdscr: window, ranks_below: int = 0) -> None:
         """
         Render the hive, if only the ranks below a given index.
         """
@@ -591,7 +572,7 @@ class Gestalt(Moveable, Audible):
                     member.render(stdscr)
 
     @classmethod
-    def find_collision(cls, bullet: Bullet) -> Optional[Gestalt]:
+    def find_collision(cls, bullet: Bullet) -> Optional[Invader]:
         """
         Find any invader struck by the player's bullet.
         """
@@ -640,9 +621,9 @@ class Gestalt(Moveable, Audible):
         return any(isinstance(b, SuperBomb) for b in cls.hive_dropped)
 
 
-class Collidable:
+class Collidable(Renderable):
     """
-    Mixin to allow a Renderable to be collided with.
+    A Renderable that can engage in collisions.
     """
 
     def __init__(self, *args, **kwargs):
@@ -859,7 +840,7 @@ class Bullet(Moveable, Collidable, Killable, Renderable):
          ❚
         """
     )
-    DEATH: Optional[Icon] = make_icon(
+    DEATH: Icon = make_icon(
         """
          ✺
         """
@@ -899,7 +880,7 @@ class Player(Moveable, Collidable, Killable, Audible, Renderable):
         ▄█▄
         """
     )
-    DEATH: Optional[Icon] = make_icon(
+    DEATH: Icon = make_icon(
         """
         ▘▙▁
         """
@@ -1170,7 +1151,7 @@ class Droppable(Moveable, Collidable, Killable, Reskinable, Renderable):
         """
         return frame % 3 == 0
 
-    def move(self, stdscr: Window, frame: int, width: int, height: int) -> None:
+    def move(self, stdscr: window, frame: int, width: int, height: int) -> None:
         super().move(stdscr, frame, width, height)
         self.in_flight += 1
 
@@ -1208,7 +1189,7 @@ class Bomb(Droppable):
         ╽
         """
     )
-    DEATH: Optional[Icon] = make_icon(
+    DEATH: Icon = make_icon(
         """
         ✸
         """
@@ -1248,7 +1229,7 @@ class SuperBomb(Bomb):
         ⟆
         """
     )
-    DEATH: Optional[Icon] = make_icon(
+    DEATH: Icon = make_icon(
         """
         ✺
         """

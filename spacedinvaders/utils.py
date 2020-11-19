@@ -5,13 +5,12 @@ Miscellaneous utilities.
 """
 # stdlib imports
 from contextlib import contextmanager
-from curses import color_pair, has_colors
+from curses import color_pair, has_colors, window
 from textwrap import dedent, shorten, wrap
 from typing import Generator, List
 
 # local imports
 from spacedinvaders.constants import Color
-from spacedinvaders.annotations import Col, Row, Window
 
 
 def regularize(string: str) -> str:
@@ -26,7 +25,7 @@ def regularize(string: str) -> str:
 
 
 @contextmanager
-def colorize(stdscr: Window, color: Color) -> Generator[Window, None, None]:
+def colorize(stdscr: window, color: Color) -> Generator[window, None, None]:
     """
     Context manager to make colorizing operations easier.
     """
@@ -38,7 +37,7 @@ def colorize(stdscr: Window, color: Color) -> Generator[Window, None, None]:
         stdscr.attroff(pair)
 
 
-def fit_within(text: str, rows: Row, cols: Col) -> List[str]:
+def fit_within(text: str, rows: int, cols: int) -> List[str]:
     """
     Wrap (and if necessary truncate) text to fit within a box defined by lines
     and cols.

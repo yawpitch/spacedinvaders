@@ -7,21 +7,31 @@ A textual, terminal spin on an arcade classic.
 import argparse
 import curses
 import locale
-import math
 import os
 import time
 from collections import deque
+from curses import window
 from functools import partial
 from random import randint
 from textwrap import dedent, indent
 from typing import BinaryIO, List, Tuple, Optional
 
 # local imports
-from .annotations import Window, Row, Col
 from .constants import Color, Control, Direction, Stage
 from .exceptions import SuccessfulInvasion
 from .letters import A, C, D, E, G, I, M, N, O, P, R, S, V
-from .units import *
+from .units import (
+    Barrier,
+    Bullet,
+    Crab,
+    Gestalt,
+    Invader,
+    Mystery,
+    Player,
+    Octopus,
+    Squid,
+    SuperBomb,
+)
 from .utils import colorize, fit_within
 
 locale.setlocale(locale.LC_ALL, "")
@@ -67,7 +77,7 @@ class PlayState:
         self._bullet_delay: int = 0
         self._mystery: Optional[Mystery] = None
         self._mystery_frame: Optional[int] = 35 * FRAMERATE
-        self._last_kills: List[Gestalt] = []
+        self._last_kills: List[Invader] = []
         self.last10 = deque(maxlen=10)
         self.egged = False
 
@@ -79,7 +89,7 @@ class PlayState:
         return self._screen
 
     @screen.setter
-    def screen(self, val: int) -> int:
+    def screen(self, val: int):
         """
         Update the current screen.
         """
@@ -90,7 +100,7 @@ class PlayState:
         self._bullet_count = 0
         self._bullet_delay = 0
         self._mystery = None
-        self._mystery_frame: int = 25 * FRAMERATE
+        self._mystery_frame = 25 * FRAMERATE
         self._last_kills = []
 
     @property
@@ -101,7 +111,7 @@ class PlayState:
         return self._frame
 
     @frame.setter
-    def frame(self, val: int) -> int:
+    def frame(self, val: int):
         """
         Update the current frame.
         """
@@ -127,7 +137,7 @@ class PlayState:
         old_score = self._score
         self._score = val
         if old_score <= 1500 <= self._score:
-            state.lives += 1
+            self.lives += 1
         self.high = max(self.high, self._score)
 
     @property
@@ -138,7 +148,7 @@ class PlayState:
         return self._high
 
     @high.setter
-    def high(self, val: int) -> int:
+    def high(self, val: int):
         """
         Update the current high score.
         """
@@ -152,7 +162,7 @@ class PlayState:
         return self._lives
 
     @lives.setter
-    def lives(self, val: int) -> None:
+    def lives(self, val: int):
         """
         Update the player's number of lives.
         Maintains the range 0-3 inclusive.
@@ -191,7 +201,7 @@ class PlayState:
         return self._credits
 
     @credits.setter
-    def credits(self, val: int) -> None:
+    def credits(self, val: int):
         """
         Update the player's number of credits.
         Maintains the range 0-99 inclusive.
@@ -240,7 +250,7 @@ class PlayState:
         return self._bullet
 
     @bullet.setter
-    def bullet(self, fired: Optional[Bullet]) -> None:
+    def bullet(self, fired: Optional[Bullet]):
         """
         Update the player's bullet.
         """
@@ -264,7 +274,7 @@ class PlayState:
         return self._mystery
 
     @mystery.setter
-    def mystery(self, ship: Optional[Mystery]) -> None:
+    def mystery(self, ship: Optional[Mystery]):
         """
         Update the mystery ship on screen.
         """
@@ -275,7 +285,7 @@ class PlayState:
         self._mystery = ship
 
     @property
-    def mystery_frame(self) -> int:
+    def mystery_frame(self) -> Optional[int]:
         """
         Countdown to mystery ship launch.
         """
@@ -291,44 +301,14 @@ class PlayState:
         self._mystery_frame = val
 
     @property
-    def last_kills(self) -> List[Gestalt]:
+    def last_kills(self) -> List[Invader]:
         """
         Player's last kills, if any.
         """
         return self._last_kills
 
 
-def initialize_screen(stdscr: Window) -> None:
-    """
-    Initialize the main screen state.
-    """
-    # hide the cursor
-    curses.curs_set(0)
-
-    # don't block waiting for user input
-    stdscr.nodelay(True)
-
-    # start colors if available
-    if curses.has_colors:
-        curses.start_color()
-
-        curses.init_pair(Color.RED, curses.COLOR_RED, curses.COLOR_BLACK)
-        curses.init_pair(Color.YELLOW, curses.COLOR_YELLOW, curses.COLOR_BLACK)
-        curses.init_pair(Color.GREEN, curses.COLOR_GREEN, curses.COLOR_BLACK)
-        curses.init_pair(Color.MAGENTA, curses.COLOR_MAGENTA, curses.COLOR_BLACK)
-        curses.init_pair(Color.BLUE, curses.COLOR_BLUE, curses.COLOR_BLACK)
-        curses.init_pair(Color.CYAN, curses.COLOR_CYAN, curses.COLOR_BLACK)
-        curses.init_pair(Color.WHITE, curses.COLOR_WHITE, curses.COLOR_BLACK)
-
-    # center the play arena in the terminal
-    resize_arena(stdscr)
-
-    # start with a blank canvas
-    stdscr.clear()
-    stdscr.refresh()
-
-
-def reflow_max(stdscr: Window) -> None:
+def reflow_max(stdscr: window) -> None:
     """
     Resize the screen back to current terminal extents.
     """
@@ -344,7 +324,7 @@ def reflow_max(stdscr: Window) -> None:
     stdscr.mvwin(0, 0)
 
 
-def resize_arena(stdscr: Window, *, reflow: bool = False) -> None:
+def resize_arena(stdscr: window, *, reflow: bool = False) -> None:
     """
     Resize and center the gameplay arena; also handle resizes that are too small.
     """
@@ -389,7 +369,7 @@ def resize_arena(stdscr: Window, *, reflow: bool = False) -> None:
     stdscr.redrawwin()
 
 
-def draw_hud(stdscr: Window, height: Row, width: Col, state: PlayState) -> None:
+def draw_hud(stdscr: window, height: int, width: int, state: PlayState) -> None:
     """
     Render the Player's status to the arena HUD.
     """
@@ -423,29 +403,16 @@ def draw_hud(stdscr: Window, height: Row, width: Col, state: PlayState) -> None:
         stdscr.addstr(bar_y, width - 1 - len(label + creds), label, curses.A_DIM)
         stdscr.addstr(bar_y, width - 1 - len(creds), creds, curses.A_BOLD)
 
-    debug = f""
-    if debug:
-        with colorize(stdscr, Color.BLUE):
-            stdscr.addstr(
-                bar_y,
-                width // 2 - len(debug) // 2,
-                debug,
-                curses.A_BOLD,
-            )
-
-
-Letter = List[str]
-
 
 def typeon(
-    stdscr: Window,
+    stdscr: window,
     center_x: int,
     start_y: int,
-    message: List[Letter],
+    message: List[List[str]],
     up_to: int,
     *,
     delay: int = 10,
-) -> int:
+) -> Tuple[int, int]:
     """
     Type on the given big type message, up to the given character.
     Returns a tuple of the number of letters to display and the number of
@@ -463,15 +430,149 @@ def typeon(
     return length, letter_count
 
 
-def mainloop(
-    stdscr: Window, *, use_sound: bool = True, dump_file: Optional[BinaryIO] = None
-) -> None:
+def govern(last_time: Optional[float]) -> float:
     """
-    The main game loop; prepares the screen and coordinates play stages.
+    Govern a loop to keep it ticking over at FRAMERATE.
+    Returns the last time this function returned, which
+    should be fed back in with future calls.
     """
+    curr_time = time.time()
+    last_time = curr_time if last_time is None else curr_time
+    delay = 1.0 / FRAMERATE - (curr_time - last_time)
+    if delay > 0:
+        time.sleep(delay)
+    return time.time()
 
-    # prepare the screen
-    initialize_screen(stdscr)
+
+def attract(stdscr: window) -> int:
+    """
+    The attraction screen loop, which entices the punters to play.
+    """
+    # don't block waiting for user input
+    stdscr.nodelay(True)
+
+    # get the up to date extents
+    height, width = stdscr.getmaxyx()
+
+    # calculate the new center points
+    center_y, center_x = round(height / 2), round(width / 2)
+
+    # used to modulate the game loop
+    last_time = None
+
+    # we'll use this to schedule events
+    frame = 0
+
+    # used to control progressive type on effects
+    typeon_spaced = typeon_invaders = 1
+    typeon_advance_table = 0
+
+    # loop where curr_key is the last character pressed or -1 on no input
+    while (curr_key := stdscr.getch()) != Control.QUIT and curr_key != Control.FIRE:
+
+        # modulate the time to keep rhe loop relatively constant
+        last_time = govern(last_time)
+
+        # handle terminal resize events
+        if curr_key == curses.KEY_RESIZE:
+            resize_arena(stdscr, reflow=True)
+            height, width = stdscr.getmaxyx()
+            center_y, center_x = round(height / 2), round(width / 2)
+            stdscr.clear()
+            stdscr.refresh()
+
+        # erase the existing screen
+        stdscr.erase()
+        start_y = center_y - 12
+
+        if 20 <= frame % FRAMERATE <= 55:
+            message = "PRESS SPACE TO PLAY"
+            start_x = center_x - round(len(message) / 2)
+            with colorize(stdscr, Color.WHITE):
+                for word in message.split():
+                    attrs = curses.A_BOLD if word == "SPACE" else curses.A_DIM
+                    stdscr.addstr(start_y, start_x, word, attrs)
+                    start_x += len(word) + 1
+
+        start_y += 2
+        spaced = [S, P, A, C, E, D]
+        spaced_count, spaced_typed = typeon(
+            stdscr, center_x, start_y, spaced, typeon_spaced, delay=50
+        )
+
+        if spaced_count == spaced_typed:
+            invaders = [I, N, V, A, D, E, R, S]
+            invaders_count, invaders_typed = typeon(
+                stdscr, center_x, start_y + 3, invaders, typeon_invaders, delay=50
+            )
+            typeon_invaders += 1
+
+        typeon_spaced += 1
+
+        if frame == 0:
+            typeon_advance_table = 0
+
+        if frame > round(FRAMERATE * 0.65):
+            start_y += 9
+            end_w = 35
+            message = "SCORE ADVANCE TABLE".center(end_w)
+            start_x = center_x - round(len(message) / 2)
+            with colorize(stdscr, Color.WHITE):
+                stdscr.addstr(
+                    start_y,
+                    start_x,
+                    message,
+                    curses.A_DIM | curses.A_BOLD | curses.A_STANDOUT,
+                )
+
+            table = [
+                (Mystery.ICON.splitlines(), Mystery.COLOR, "? MYSTERY"),
+                (Squid.ICON.splitlines(), Color.WHITE, f"{Squid.POINTS} POINTS"),
+                (Crab.ICON.splitlines(), Color.WHITE, f"{Crab.POINTS} POINTS"),
+                (
+                    Octopus.ICON.splitlines(),
+                    Color.YELLOW,
+                    f"{Octopus.POINTS} POINTS",
+                ),
+            ]
+
+            if frame > round(FRAMERATE * 0.85) and frame % FRAMERATE == 40:
+                typeon_advance_table += 1
+
+            start_y += 2
+            pad_x = max([len(i[0][0]) for i in table])
+            for critter_idx, (icon, color, points) in enumerate(
+                table[:typeon_advance_table]
+            ):
+                for idx, line in enumerate(icon):
+                    with colorize(stdscr, color):
+                        stdscr.addstr(start_y + idx, start_x + 2, line.center(pad_x))
+                    if (critter_idx == 0 and idx == 1) or (critter_idx and idx == 0):
+                        with colorize(
+                            stdscr, Color.WHITE if color != Color.YELLOW else color
+                        ):
+                            stdscr.addstr(
+                                start_y + idx,
+                                start_x + end_w - len(points) - 2,
+                                points,
+                            )
+                start_y += len(icon)
+                if 0 < critter_idx:
+                    start_y += 1
+
+        stdscr.refresh()
+        frame = (frame + 1) % (FRAMERATE * 30)
+
+    # return the keycode that exited
+    return curr_key
+
+
+def play(stdscr: window, use_sound: bool, dump_file: Optional[BinaryIO]) -> int:
+    """
+    The play loop, which presents the actual game.
+    """
+    # don't block waiting for user input
+    stdscr.nodelay(True)
 
     # get the up to date extents
     height, width = stdscr.getmaxyx()
@@ -482,11 +583,11 @@ def mainloop(
     # track the play state
     state = PlayState()
 
+    # used to modulate the play loop timing
     last_time = None
+
+    # track some progressively drawn on elemnts
     redraw_ranks_below = 4
-    attract_frame = 0
-    typeon_spaced = typeon_invaders = 1
-    typeon_advance_table = 0
     typeon_game_over = 1
 
     # spawn the player
@@ -501,102 +602,7 @@ def mainloop(
     while (curr_key := stdscr.getch()) != Control.QUIT:
 
         # modulate the time to keep rhe loop relatively constant
-        curr_time = time.time()
-        delay = 1.0 / FRAMERATE - (curr_time - (last_time or curr_time))
-        if delay > 0:
-            time.sleep(delay)
-        last_time = time.time()
-
-        if False:
-
-            stdscr.erase()
-            start_y = center_y - 12
-
-            if 20 <= attract_frame % FRAMERATE <= 55:
-                message = "PRESS SPACE TO PLAY"
-                start_x = center_x - round(len(message) / 2)
-                with colorize(stdscr, Color.WHITE):
-                    for word in message.split():
-                        attrs = curses.A_BOLD if word == "SPACE" else curses.A_DIM
-                        stdscr.addstr(start_y, start_x, word, attrs)
-                        start_x += len(word) + 1
-
-            start_y += 2
-            spaced = [S, P, A, C, E, D]
-            spaced_count, spaced_typed = typeon(
-                stdscr, center_x, start_y, spaced, typeon_spaced, delay=50
-            )
-
-            if spaced_count == spaced_typed:
-                invaders = [I, N, V, A, D, E, R, S]
-                invaders_count, invaders_typed = typeon(
-                    stdscr, center_x, start_y + 3, invaders, typeon_invaders, delay=50
-                )
-                typeon_invaders += 1
-
-            typeon_spaced += 1
-
-            if attract_frame == 0:
-                typeon_advance_table = 0
-
-            if attract_frame > round(FRAMERATE * 0.65):
-                start_y += 9
-                end_w = 35
-                message = "SCORE ADVANCE TABLE".center(end_w)
-                start_x = center_x - round(len(message) / 2)
-                with colorize(stdscr, Color.WHITE):
-                    stdscr.addstr(
-                        start_y,
-                        start_x,
-                        message,
-                        curses.A_DIM | curses.A_BOLD | curses.A_STANDOUT,
-                    )
-
-                table = [
-                    (Mystery.ICON.splitlines(), Mystery.COLOR, "? MYSTERY"),
-                    (Squid.ICON.splitlines(), Color.WHITE, f"{Squid.POINTS} POINTS"),
-                    (Crab.ICON.splitlines(), Color.WHITE, f"{Crab.POINTS} POINTS"),
-                    (
-                        Octopus.ICON.splitlines(),
-                        Color.YELLOW,
-                        f"{Octopus.POINTS} POINTS",
-                    ),
-                ]
-
-                if (
-                    attract_frame > round(FRAMERATE * 0.85)
-                    and attract_frame % FRAMERATE == 40
-                ):
-                    typeon_advance_table += 1
-
-                start_y += 2
-                pad_x = max([len(i[0][0]) for i in table])
-                for critter_idx, (icon, color, points) in enumerate(
-                    table[:typeon_advance_table]
-                ):
-                    for idx, line in enumerate(icon):
-                        with colorize(stdscr, color):
-                            stdscr.addstr(
-                                start_y + idx, start_x + 2, line.center(pad_x)
-                            )
-                        if (critter_idx == 0 and idx == 1) or (
-                            critter_idx and idx == 0
-                        ):
-                            with colorize(
-                                stdscr, Color.WHITE if color != Color.YELLOW else color
-                            ):
-                                stdscr.addstr(
-                                    start_y + idx,
-                                    start_x + end_w - len(points) - 2,
-                                    points,
-                                )
-                    start_y += len(icon)
-                    if 0 < critter_idx:
-                        start_y += 1
-
-            stdscr.refresh()
-            attract_frame = (attract_frame + 1) % (FRAMERATE * 30)
-            continue
+        last_time = govern(last_time)
 
         # handle terminal resize events
         if curr_key == curses.KEY_RESIZE:
@@ -654,10 +660,8 @@ def mainloop(
             if letter_count == letters_typed:
                 curses.flushinp()
                 stdscr.refresh()
-                curses.delay_output(1000)
-                stdscr.timeout(-1)
-                while stdscr.getch():
-                    raise SystemExit("Game Over")
+                stdscr.timeout(1500)
+                return stdscr.getch()
             else:
                 typeon_game_over += 1
 
@@ -713,7 +717,7 @@ def mainloop(
         # aliens move even if the player is spawning, but pause for death, etc
         if state.stage in Stage.SPAWN | Stage.RUNNING:
             # launch the mystery ship
-            if state.mystery_frame <= 0 and not Gestalt.superboom():
+            if state.mystery_frame is not None and state.mystery_frame <= 0 and not Gestalt.superboom():
                 if Gestalt.remaining() <= 8:
                     state.mystery_frame = None
                 else:
@@ -889,6 +893,42 @@ def mainloop(
         # refresh the screen
         stdscr.refresh()
         state.frame += 1
+
+    # return the last key (which will be CTRL + Q here
+    return curr_key
+
+
+def mainloop(
+    stdscr: window, *, use_sound: bool = True, dump_file: Optional[BinaryIO] = None
+) -> None:
+    """
+    The main game loop; prepares the screen and coordinates play stages.
+    """
+    # hide the cursor
+    curses.curs_set(0)
+
+    # start colors if available
+    if curses.has_colors:
+        curses.start_color()
+
+        curses.init_pair(Color.RED, curses.COLOR_RED, curses.COLOR_BLACK)
+        curses.init_pair(Color.YELLOW, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+        curses.init_pair(Color.GREEN, curses.COLOR_GREEN, curses.COLOR_BLACK)
+        curses.init_pair(Color.MAGENTA, curses.COLOR_MAGENTA, curses.COLOR_BLACK)
+        curses.init_pair(Color.BLUE, curses.COLOR_BLUE, curses.COLOR_BLACK)
+        curses.init_pair(Color.CYAN, curses.COLOR_CYAN, curses.COLOR_BLACK)
+        curses.init_pair(Color.WHITE, curses.COLOR_WHITE, curses.COLOR_BLACK)
+
+    # center the play arena in the terminal
+    resize_arena(stdscr)
+
+    # start with a blank canvas
+    stdscr.clear()
+    stdscr.refresh()
+
+    while attract(stdscr) != Control.QUIT:
+        if play(stdscr, use_sound, dump_file) == Control.QUIT:
+            return
 
 
 def main() -> None:
