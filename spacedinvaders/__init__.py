@@ -8,6 +8,7 @@ import argparse
 import curses
 import locale
 import os
+import sqlite3
 import time
 from collections import deque
 from curses import window
@@ -32,7 +33,7 @@ from .units import (
     Squid,
     SuperBomb,
 )
-from .utils import colorize, fit_within
+from .utils import colorize, cursize, fit_within
 
 locale.setlocale(locale.LC_ALL, "")
 
@@ -52,10 +53,22 @@ if ARENA_HEIGHT % 2:
 
 
 def get_db():
-    os.environ.get("SPACEDINVADERS_DATA_HOME")
-    os.path.expandvars(
-        os.path.expanduser(os.environ.get("XDG_DATA_HOME", "~/.local/share"))
+    """
+    Find the local high scores database, if possible.
+    """
+    path = os.path.join(
+        os.path.expandvars(
+            os.path.expanduser(
+                os.environ.get(
+                    "SPACEDINVADERS_DATA_HOME",
+                    os.environ.get("XDG_DATA_HOME", "~/.local/share"),
+                )
+            )
+        ),
+        "spacedinvaders/scores.sqlite",
     )
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return sqlite3.connect(path)
 
 
 class PlayState:
@@ -717,7 +730,11 @@ def play(stdscr: window, use_sound: bool, dump_file: Optional[BinaryIO]) -> int:
         # aliens move even if the player is spawning, but pause for death, etc
         if state.stage in Stage.SPAWN | Stage.RUNNING:
             # launch the mystery ship
-            if state.mystery_frame is not None and state.mystery_frame <= 0 and not Gestalt.superboom():
+            if (
+                state.mystery_frame is not None
+                and state.mystery_frame <= 0
+                and not Gestalt.superboom()
+            ):
                 if Gestalt.remaining() <= 8:
                     state.mystery_frame = None
                 else:
@@ -918,6 +935,34 @@ def mainloop(
         curses.init_pair(Color.BLUE, curses.COLOR_BLUE, curses.COLOR_BLACK)
         curses.init_pair(Color.CYAN, curses.COLOR_CYAN, curses.COLOR_BLACK)
         curses.init_pair(Color.WHITE, curses.COLOR_WHITE, curses.COLOR_BLACK)
+
+        if curses.can_change_color():
+            # color values from schemcoloer:
+            # https://www.schemecolor.com/classic-space-invaders.php
+            # coral red
+            curses.init_color(curses.COLOR_RED, cursize(248), cursize(59), cursize(58))
+            # arylide yellow
+            curses.init_color(
+                curses.COLOR_YELLOW, cursize(235), cursize(223), cursize(100)
+            )
+
+            # pastel green
+            curses.init_color(
+                curses.COLOR_GREEN, cursize(98), cursize(222), cursize(109)
+            )
+
+            # orchid
+            curses.init_color(
+                curses.COLOR_MAGENTA, cursize(219), cursize(85), cursize(221)
+            )
+
+            # majorelle blue
+            curses.init_color(curses.COLOR_BLUE, cursize(83), cursize(83), cursize(241))
+
+            # turquoise
+            curses.init_color(
+                curses.COLOR_CYAN, cursize(66), cursize(233), cursize(244)
+            )
 
     # center the play arena in the terminal
     resize_arena(stdscr)
