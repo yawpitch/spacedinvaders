@@ -13,9 +13,10 @@ import time
 from collections import deque
 from curses import window
 from functools import partial
+from itertools import cycle
 from random import randint
 from textwrap import dedent, indent
-from typing import BinaryIO, List, Tuple, Optional
+from typing import List, Tuple, Optional
 
 # local imports
 from .constants import Color, Control, Direction, Stage
@@ -580,7 +581,7 @@ def attract(stdscr: window) -> int:
     return curr_key
 
 
-def play(stdscr: window, use_sound: bool, dump_file: Optional[BinaryIO]) -> int:
+def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
     """
     The play loop, which presents the actual game.
     """
@@ -611,8 +612,35 @@ def play(stdscr: window, use_sound: bool, dump_file: Optional[BinaryIO]) -> int:
         use_sound=use_sound,
     )
 
+    # demo "AI" directions from like 1F74:
+    # https://www.computerarcheology.com/Arcade/SpaceInvaders/Code.html
+    demo_commands = cycle(
+        [
+            Control.RARR,
+            Control.RARR,
+            Control.NULL,
+            Control.NULL,
+            Control.RARR,
+            Control.NULL,
+            Control.LARR,
+            Control.RARR,
+            Control.NULL,
+            Control.LARR,
+            Control.RARR,
+            Control.NULL,
+        ]
+    )
+
+    # tracks the current player movement command in demo mode
+    demo_cmd = next(demo_commands)
+
+    # in demo mode only we'll exit on SPACE press
+    exit_inputs = set([Control.QUIT])
+    if demo_mode:
+        exit_inputs.add(Control.FIRE)
+
     # loop where curr_key is the last character pressed or -1 on no input
-    while (curr_key := stdscr.getch()) != Control.QUIT:
+    while (curr_key := stdscr.getch()) not in exit_inputs:
 
         # modulate the time to keep rhe loop relatively constant
         last_time = govern(last_time)
@@ -713,19 +741,92 @@ def play(stdscr: window, use_sound: bool, dump_file: Optional[BinaryIO]) -> int:
         if state.stage is Stage.SPAWN and state.can_spawn():
             state.stage = Stage.RUNNING
 
-        # if we're runing after player respawn, handle player actions
+        # if we're running after player respawn, handle player actions
         if state.stage is Stage.RUNNING:
-            if curr_key == Control.FIRE and state.bullet is None:
+            # player firing might follow demo logic
+            if demo_mode and state.frame % 2:
+                # in the arcade game the demo player fires whenever possible
+                # but we're going to be a wee bit more modern AI about it
+                beam_path = round((2 * player.x + player.w) / 2)
+
+                # for preference, pursue the mystery ship
+                if state.mystery:
+                    x_lim = state.mystery.x - 3
+                    w_lim = state.mystery.x + state.mystery.w + 3
+
+                # otherwise concentrate on the invader ranks
+                else:
+                    # search for the left rank
+                    x_lim = 0
+                    for col in Gestalt.hive_members:
+                        for member in col:
+                            if member is not None:
+                                x_lim = max(1, member.x - 3)
+                                break
+                        if x_lim > 0:
+                            break
+                    x_lim = max(1, x_lim)
+
+                    # search for the right rank
+                    w_lim = width
+                    for col in reversed(Gestalt.hive_members):
+                        for member in col:
+                            if member is not None:
+                                w_lim = min(width - 2, member.x + member.w + 3)
+                                break
+                        if w_lim < width:
+                            break
+                    w_lim = min(width - 2, w_lim)
+
+                # if we're under the basterds, and we can, fire!
+                if x_lim <= beam_path <= w_lim:
+                    under_barrier = any(
+                        (b.x <= beam_path <= b.x + b.w) for b in barriers
+                    )
+                    if (
+                        state.bullet is None
+                        and state.can_fire()
+                        and (not under_barrier or randint(0, 8) == 0)
+                    ):
+                        state.bullet = player.fire()
+                        state.bullet.render(stdscr)
+                        # rack up the next player movement
+                        demo_cmd = next(demo_commands)
+                # otherwise move towards those alien scum!
+                elif round((x_lim + w_lim) / 2) < beam_path:
+                    while not Control.is_left(demo_cmd):
+                        demo_cmd = next(demo_commands)
+                else:
+                    while not Control.is_right(demo_cmd):
+                        demo_cmd = next(demo_commands)
+
+                # in the arcade game there's no obvious attempt to react
+                # to the demo player hitting a wall, so here we're just going
+                # to keep the player from lurking at the edges too long
+                if Control.is_left(demo_cmd) or demo_cmd == Control.NULL:
+                    if player.x - 1 <= 1:
+                        demo_cmd = next(demo_commands)
+                elif Control.is_right(demo_cmd) or demo_cmd == Control.NULL:
+                    if player.x + player.w + 1 >= width - 2:
+                        demo_cmd = next(demo_commands)
+
+                # demo player moves according to the current demo_cmd value
+                curr_key = demo_cmd
+
+            # ... or player inputs
+            elif curr_key == Control.FIRE and state.bullet is None:
                 if state.can_fire():
                     state.bullet = player.fire()
                     state.bullet.render(stdscr)
-            elif Control.is_left(curr_key):
+
+            # update the player's position on directional input
+            if Control.is_left(curr_key):
                 player.x = max(1, player.x - 1)
             elif Control.is_right(curr_key):
-                player.x = min(width - player.w - 1, player.x + 1)
+                player.x = min(width - player.w - 2, player.x + 1)
 
-            # move the player
-            player.move(stdscr, state.frame, width, height)
+            # move the player; this is really just to handle wall collision
+            # player.move(stdscr, state.frame, width, height)
 
         # aliens move even if the player is spawning, but pause for death, etc
         if state.stage in Stage.SPAWN | Stage.RUNNING:
@@ -915,9 +1016,7 @@ def play(stdscr: window, use_sound: bool, dump_file: Optional[BinaryIO]) -> int:
     return curr_key
 
 
-def mainloop(
-    stdscr: window, *, use_sound: bool = True, dump_file: Optional[BinaryIO] = None
-) -> None:
+def mainloop(stdscr: window, *, use_sound: bool = True) -> None:
     """
     The main game loop; prepares the screen and coordinates play stages.
     """
@@ -972,7 +1071,7 @@ def mainloop(
     stdscr.refresh()
 
     while attract(stdscr) != Control.QUIT:
-        if play(stdscr, use_sound, dump_file) == Control.QUIT:
+        if play(stdscr, use_sound) == Control.QUIT:
             return
 
 
@@ -1002,14 +1101,6 @@ def main() -> None:
         ).format(icon=indent(Mystery.ICON, " " * 8)),
     )
 
-    # hidden option to dump out play state to file
-    # necessary for recording a new demo
-    parser.add_argument(
-        "--dump",
-        type=argparse.FileType("wb"),
-        help=argparse.SUPPRESS,
-    )
-
     parser.add_argument(
         "-q",
         "--quiet",
@@ -1017,6 +1108,7 @@ def main() -> None:
         action="store_false",
         help="disable game sounds",
     )
+
     parser.add_argument(
         "-V", "--version", action="version", version="%(prog)s " + VERSION
     )
@@ -1024,7 +1116,7 @@ def main() -> None:
     opts = parser.parse_args()
 
     # start the game and clean up the screen on errors
-    curses.wrapper(partial(mainloop, use_sound=opts.use_sound, dump_file=opts.dump))
+    curses.wrapper(partial(mainloop, use_sound=opts.use_sound))
 
 
 if __name__ == "__main__":
