@@ -8,6 +8,7 @@ import argparse
 import curses
 import locale
 import os
+import string
 import sqlite3
 import time
 from collections import deque
@@ -16,12 +17,13 @@ from functools import partial
 from itertools import cycle
 from random import randint
 from textwrap import dedent, indent
-from typing import List, Tuple, Optional
+from typing import List, NamedTuple, Optional, Tuple
 
 # local imports
 from .constants import Color, Control, Direction, Stage
 from .exceptions import SuccessfulInvasion
 from .letters import A, C, D, E, G, I, M, N, O, P, R, S, V
+from .sounds import Sound
 from .units import (
     Barrier,
     Bullet,
@@ -53,23 +55,100 @@ if ARENA_HEIGHT % 2:
     ARENA_HEIGHT += 1
 
 
-def get_db():
+class ScoresDB:
     """
-    Find the local high scores database, if possible.
+    Database for tracking high scores.
     """
-    path = os.path.join(
-        os.path.expandvars(
-            os.path.expanduser(
-                os.environ.get(
-                    "SPACEDINVADERS_DATA_HOME",
-                    os.environ.get("XDG_DATA_HOME", "~/.local/share"),
+
+    def __init__(self):
+        self.path = os.path.join(
+            os.path.expandvars(
+                os.path.expanduser(
+                    os.environ.get(
+                        "SPACEDINVADERS_DATA_HOME",
+                        os.environ.get("XDG_DATA_HOME", "~/.local/share"),
+                    )
                 )
-            )
-        ),
-        "spacedinvaders/scores.sqlite",
-    )
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    return sqlite3.connect(path)
+            ),
+            "spacedinvaders/scores.sqlite",
+        )
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.con = sqlite3.connect(self.path)
+        self.con.row_factory = sqlite3.Row
+        query = dedent(
+            """
+            CREATE TABLE IF NOT EXISTS scores (
+              id INTEGER PRIMARY KEY,
+              name TEXT NOT NULL,
+              score INTEGER NOT NULL,
+              CHECK (
+                length(name) == 3
+                AND score >= 0
+                AND score <= 9999
+              )
+            );
+            """
+        ).strip()
+        self.con.execute(query)
+
+    def get_leaders(self) -> List[Tuple[str, int]]:
+        """
+        Returns the current top 10 scores.
+        """
+        query = dedent(
+            """
+            SELECT
+              name, score
+            FROM
+              scores
+            ORDER BY
+              score DESC,
+              id ASC
+            LIMIT 10;
+            """
+        ).strip()
+
+        leaders: List[sqlite3.Row] = self.con.execute(query).fetchall()
+        return [(l["name"], l["score"]) for l in leaders]
+
+    def get_high(self) -> int:
+        """
+        Returns the current high score, or 0 if none exists.
+        """
+        query = dedent(
+            """
+            SELECT
+              score
+            FROM
+              scores
+            ORDER BY
+              score DESC;
+            """
+        ).strip()
+
+        score: Optional[sqlite3.Row] = self.con.execute(query).fetchone()
+        if score is not None:
+            return score["score"]
+        return 0
+
+    def set_high(self, name: str, score: int) -> None:
+        """
+        Records a new high score in the database.
+        """
+        query = dedent(
+            """
+            INSERT INTO
+              scores (name, score)
+            VALUES
+              (?, ?);
+            """
+        ).strip()
+
+        with self.con:
+            self.con.execute(query, (name, score))
+
+
+DB = ScoresDB()
 
 
 class PlayState:
@@ -77,12 +156,13 @@ class PlayState:
     Class to track the current game state.
     """
 
-    def __init__(self):
-        self._screen: int = 0
+    def __init__(self, *, demo_mode=False):
+        self._screen: int = 2 if demo_mode else 0
         self._frame: int = 0
         self._score: int = 0
-        self._high: int = 0
-        self._lives: int = 3
+        self._high: int = 9999 if demo_mode else DB.get_high()
+        self._new_high: bool = False
+        self._lives: int = 2 if demo_mode else 3
         self._stage: Stage = Stage.REDRAW
         self._respawn_delay: int = round(1.5 * FRAMERATE)
         self._credits: int = 0
@@ -92,6 +172,7 @@ class PlayState:
         self._mystery: Optional[Mystery] = None
         self._mystery_frame: Optional[int] = 35 * FRAMERATE
         self._last_kills: List[Invader] = []
+        self._demo: bool = demo_mode
         self.last10 = deque(maxlen=10)
         self.egged = False
 
@@ -115,7 +196,7 @@ class PlayState:
         self._bullet_delay = 0
         self._mystery = None
         self._mystery_frame = 25 * FRAMERATE
-        self._last_kills = []
+        self._last_kills.clear()
 
     @property
     def frame(self) -> int:
@@ -150,9 +231,10 @@ class PlayState:
         """
         old_score = self._score
         self._score = val
-        if old_score <= 1500 <= self._score:
-            self.lives += 1
-        self.high = max(self.high, self._score)
+        if not self._demo:
+            if old_score <= 1500 <= self._score:
+                self.lives += 1
+            self.high = max(self.high, self._score)
 
     @property
     def high(self) -> int:
@@ -166,7 +248,17 @@ class PlayState:
         """
         Update the current high score.
         """
+        if val > self._high:
+            self._new_high = True
         self._high = val
+
+    def has_high(self) -> bool:
+        """
+        Check if the player has set a new high score.
+        """
+        if self._demo:
+            return False
+        return self._new_high
 
     @property
     def lives(self) -> int:
@@ -458,7 +550,108 @@ def govern(last_time: Optional[float]) -> float:
     return time.time()
 
 
-def attract(stdscr: window) -> int:
+def record(stdscr: window, score: int) -> int:
+    """
+    Loop for recording a new high score.
+    """
+    # get the up to date extents
+    height, width = stdscr.getmaxyx()
+
+    # calculate the new center points
+    center_y, center_x = round(height / 2), round(width / 2)
+    half_width = center_x
+    quarter_width = round(half_width / 2)
+
+    popup = stdscr.derwin(8, half_width + 2, center_y - 5, center_x - quarter_width - 1)
+    # get the popup extents
+    height, width = popup.getmaxyx()
+
+    # calculate the new center points
+    center_y, center_x = round(height / 2), round(width / 2)
+
+    # clear the popup
+    popup.clear()
+
+    # draw the fancy box
+    with colorize(popup, Color.WHITE):
+        x, y, w, h = 0, 0, width - 1, height - 2
+        popup.addstr(y, x, "╭" + ("─" * (w - 1)) + "╮", curses.A_DIM)
+        for i in range(y + 1, h):
+            popup.addstr(i, x, "│", curses.A_DIM)
+            popup.addstr(i, w, "│", curses.A_DIM)
+
+        popup.addstr(h, x, "╰" + ("─" * (w - 1)) + "╯", curses.A_DIM)
+
+    # draw the static lines
+    start, end = "CONGRATULATIONS ON A NEW ", "HIGH SCORE"
+    start_y = center_y - 2
+    start_x = center_x - round(len(start + end) / 2)
+    with colorize(stdscr, Color.WHITE):
+        popup.addstr(start_y, start_x, start, curses.A_DIM)
+        start_x += len(start)
+        popup.addstr(start_y, start_x, end, curses.A_BOLD)
+
+    valid = string.ascii_uppercase + string.digits + string.punctuation
+    chars = ["A", "A", "A"]
+    highlight = 0
+
+    label = "PLEASE ENTER YOUR INITIALS: "
+    start_y += 1
+    start_x = center_x - round((len(label) + len(chars)) / 2)
+    selector_y = start_y
+    selector_x = start_x + len(label)
+    with colorize(stdscr, Color.WHITE):
+        popup.addstr(start_y, start_x, label, curses.A_DIM)
+        for idx, char in enumerate(chars):
+            if idx == highlight:
+                popup.addstr(selector_y, selector_x + idx, char, curses.A_STANDOUT)
+            else:
+                popup.addstr(selector_y, selector_x + idx, char, curses.A_BOLD)
+
+    start = "HIT "
+    mid = "ENTER"
+    end = " TO COMMIT"
+    start_y += 1
+    start_x = center_x - round((len(start) + len(mid) + len(end)) / 2)
+    with colorize(stdscr, Color.WHITE):
+        popup.addstr(start_y, start_x, start, curses.A_DIM)
+        start_x += len(start)
+        popup.addstr(start_y, start_x, mid, curses.A_BOLD)
+        start_x += len(mid)
+        popup.addstr(start_y, start_x, end, curses.A_DIM)
+
+    # loop where curr_key is the last character pressed or -1 on no input
+    while (curr_key := stdscr.getch()) != Control.QUIT and not Control.is_enter(
+        curr_key
+    ):
+        if Control.is_left(curr_key):
+            highlight = (highlight - 1) % len(chars)
+        elif Control.is_right(curr_key):
+            highlight = (highlight + 1) % len(chars)
+        elif Control.is_up(curr_key):
+            curr = valid.index(chars[highlight])
+            chars[highlight] = valid[(curr - 1) % len(valid)]
+        elif Control.is_down(curr_key):
+            curr = valid.index(chars[highlight])
+            chars[highlight] = valid[(curr + 1) % len(valid)]
+
+        with colorize(stdscr, Color.WHITE):
+            for idx, char in enumerate(chars):
+                if idx == highlight:
+                    popup.addstr(selector_y, selector_x + idx, char, curses.A_STANDOUT)
+                else:
+                    popup.addstr(selector_y, selector_x + idx, char, curses.A_BOLD)
+
+        popup.refresh()
+
+    # commit the new high score to the database
+    if Control.is_enter(curr_key):
+        DB.set_high("".join(chars), score)
+
+    return curr_key
+
+
+def attract(stdscr: window, *, use_sound: bool = True) -> int:
     """
     The attraction screen loop, which entices the punters to play.
     """
@@ -479,7 +672,13 @@ def attract(stdscr: window) -> int:
 
     # used to control progressive type on effects
     typeon_spaced = typeon_invaders = 1
-    typeon_advance_table = 0
+    typeon_advance_table = typeon_leaderboard = 0
+
+    # get the current leaderboard
+    leaderboard = DB.get_leaders()
+
+    # count the number of times we've displayed all the splash
+    splash_count = 0
 
     # loop where curr_key is the last character pressed or -1 on no input
     while (curr_key := stdscr.getch()) != Control.QUIT and curr_key != Control.FIRE:
@@ -497,6 +696,16 @@ def attract(stdscr: window) -> int:
 
         # erase the existing screen
         stdscr.erase()
+
+        # if we've gone around enough times, run the demo
+        if splash_count == (1 if leaderboard else 2):
+            stdscr.refresh()
+            curses.delay_output(500)
+            if play(stdscr, use_sound=False, demo_mode=True) == Control.QUIT:
+                return Control.QUIT
+            splash_count = 0
+            continue
+
         start_y = center_y - 12
 
         if 20 <= frame % FRAMERATE <= 55:
@@ -524,9 +733,12 @@ def attract(stdscr: window) -> int:
         typeon_spaced += 1
 
         if frame == 0:
-            typeon_advance_table = 0
+            typeon_advance_table = typeon_leaderboard = 0
 
-        if frame > round(FRAMERATE * 0.65):
+        # draw the score advance table
+        splash_on = round(FRAMERATE * 0.65)
+        splash_off = splash_on + 6 * FRAMERATE
+        if splash_on <= frame <= splash_off:
             start_y += 9
             end_w = 35
             message = "SCORE ADVANCE TABLE".center(end_w)
@@ -550,8 +762,11 @@ def attract(stdscr: window) -> int:
                 ),
             ]
 
-            if frame > round(FRAMERATE * 0.85) and frame % FRAMERATE == 40:
+            first_entry_delay = splash_on + round(FRAMERATE * 0.20)
+            if frame > first_entry_delay and frame % FRAMERATE == 40:
                 typeon_advance_table += 1
+                if use_sound and typeon_advance_table <= len(table):
+                    Sound.INVADER.play()
 
             start_y += 2
             pad_x = max([len(i[0][0]) for i in table])
@@ -574,8 +789,60 @@ def attract(stdscr: window) -> int:
                 if 0 < critter_idx:
                     start_y += 1
 
+            # increment the splash screen counter when fully drawn
+            if typeon_advance_table == len(table):
+                typeon_advance_table += 1
+
+        if leaderboard:
+            splash_on = splash_off + splash_on
+            splash_off = splash_on + max(
+                FRAMERATE * 6, round(FRAMERATE * len(leaderboard) + 0.8)
+            )
+        if leaderboard and splash_on <= frame <= splash_off:
+
+            start_y += 9
+            end_w = 35
+            message = "HIGH SCORES".center(end_w)
+            start_x = center_x - round(len(message) / 2)
+            with colorize(stdscr, Color.WHITE):
+                stdscr.addstr(
+                    start_y,
+                    start_x,
+                    message,
+                    curses.A_DIM | curses.A_BOLD | curses.A_STANDOUT,
+                )
+
+            first_entry_delay = splash_on + round(FRAMERATE * 0.20)
+            if frame > first_entry_delay and frame % FRAMERATE == 20:
+                typeon_leaderboard += 1
+                if use_sound and typeon_leaderboard <= len(leaderboard):
+                    Sound.INVADER.play()
+
+            start_y += 1
+            for idx, (name, score) in enumerate(leaderboard[:typeon_leaderboard]):
+
+                start_y += 1
+                name_str = f"{idx + 1: 2d}: {name}"
+                name_x = start_x + 2
+                score_str = f"{score: 4d} POINTS"
+                score_x = start_x + end_w - 3 - len(score_str)
+                with colorize(stdscr, Color.YELLOW if not idx else Color.WHITE):
+                    # distinguish alternating lines
+                    if idx % 2:
+                        stdscr.addstr(start_y, name_x, name_str, curses.A_DIM)
+                        stdscr.addstr(start_y, score_x, score_str, curses.A_DIM)
+                    else:
+                        stdscr.addstr(start_y, name_x, name_str)
+                        stdscr.addstr(start_y, score_x, score_str)
+
+            # increment the splash screen counter when fully drawn
+            if typeon_leaderboard == len(leaderboard):
+                typeon_leaderboard += 1
+
         stdscr.refresh()
-        frame = (frame + 1) % (FRAMERATE * 30)
+        frame = (frame + 1) % (splash_off + round(FRAMERATE * 0.25))
+        if frame == 0:
+            splash_count += 1
 
     # return the keycode that exited
     return curr_key
@@ -595,7 +862,7 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
     center_y, center_x = round(height / 2), round(width / 2)
 
     # track the play state
-    state = PlayState()
+    state = PlayState(demo_mode=demo_mode)
 
     # used to modulate the play loop timing
     last_time = None
@@ -701,8 +968,15 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
             if letter_count == letters_typed:
                 curses.flushinp()
                 stdscr.refresh()
+                if state.has_high():
+                    return record(stdscr, state.high)
+                if demo_mode:
+                    curses.delay_output(1500)
+                    return Control.NULL
                 stdscr.timeout(1500)
-                return stdscr.getch()
+                pressed = stdscr.getch()
+                stdscr.nodelay(True)
+                return pressed
             else:
                 typeon_game_over += 1
 

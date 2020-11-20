@@ -44,6 +44,9 @@ class Control(IntEnum):
     RKEY = ord("d")
     FIRE = curses.ascii.SP
     BKEY = ord("b")
+    ENTR = curses.KEY_ENTER
+    NEWL = ord("\n")
+    RETN = ord("\r")
 
     @classmethod
     def is_left(cls, command: int) -> bool:
@@ -57,7 +60,28 @@ class Control(IntEnum):
         """
         Check if a valid left control has been issued.
         """
-        return command == cls.RARR or command == cls.RKEY
+        return command in set([cls.RARR, cls.RKEY])
+
+    @classmethod
+    def is_up(cls, command: int) -> bool:
+        """
+        Check if a valid up control has been issued.
+        """
+        return command in set([cls.UARR, cls.UKEY])
+
+    @classmethod
+    def is_down(cls, command: int) -> bool:
+        """
+        Check if a valid left control has been issued.
+        """
+        return command in set([cls.DARR, cls.DKEY])
+
+    @classmethod
+    def is_enter(cls, command: int) -> bool:
+        """
+        Check if a valid Enter / Return key has been hit.
+        """
+        return command in set([cls.ENTR, cls.NEWL, cls.RETN]) 
 
     @staticmethod
     def has_komando(last10: Deque[Control]) -> bool:
