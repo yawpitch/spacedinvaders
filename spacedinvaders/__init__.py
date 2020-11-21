@@ -38,10 +38,11 @@ from .units import (
 )
 from .utils import colorize, cursize, fit_within
 
+__version__ = "0.0.2"
+
 locale.setlocale(locale.LC_ALL, "")
 
 CODEC = locale.getpreferredencoding()
-VERSION = "0.0.1"
 FRAMERATE = 60
 
 # Constants that represent the screen dimensions
@@ -925,8 +926,9 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
             state.last10.append(curr_key)
             if curr_key == Control.LKEY:
                 if Control.has_komando(state.last10):
-                    state.credits += 10
+                    state.credits = 1
                     state.egged = True
+                    Sound.COIN.play()
 
         # if we're currently handling a player win, pause and level up
         if state.stage is Stage.WIN and state.bullet is None:
