@@ -4,8 +4,8 @@
 Various sounds used by the game, if available.
 """
 # stdlib imports
-import pkg_resources
 from functools import partial
+import pkg_resources
 
 # external library imports
 try:
@@ -16,6 +16,8 @@ except ImportError:
         """
         Dummy WaveObject if simpleaudio fails to import.
         """
+
+        # pylint: disable=no-self-use, missing-function-docstring
 
         def play(self):
             ...
@@ -36,6 +38,8 @@ class Sound:
     If simplesound is not available, the Sound.[SOUND].play
     method is a noop.
     """
+
+    # pylint: disable=too-few-public-methods
 
     EXPLOSION = _load(_resource("media/explosion.wav"))
     INVADER = _load(_resource("media/invader.wav"))

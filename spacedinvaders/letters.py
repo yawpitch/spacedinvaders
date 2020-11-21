@@ -4,7 +4,7 @@
 Letters used on the play screens.
 """
 # stdlib imports
-from .utils import regularize
+from spacedinvaders.utils import regularize
 
 
 A = regularize(

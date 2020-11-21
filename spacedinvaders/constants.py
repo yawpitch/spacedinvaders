@@ -53,7 +53,7 @@ class Control(IntEnum):
         """
         Check if a valid left control has been issued.
         """
-        return command == cls.LARR or command == cls.LKEY
+        return command in set([cls.LARR, cls.LKEY])
 
     @classmethod
     def is_right(cls, command: int) -> bool:
@@ -81,7 +81,7 @@ class Control(IntEnum):
         """
         Check if a valid Enter / Return key has been hit.
         """
-        return command in set([cls.ENTR, cls.NEWL, cls.RETN]) 
+        return command in set([cls.ENTR, cls.NEWL, cls.RETN])
 
     @staticmethod
     def has_komando(last10: Deque[Control]) -> bool:

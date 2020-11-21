@@ -44,10 +44,10 @@ def fit_within(text: str, rows: int, cols: int) -> List[str]:
     """
     return wrap(shorten(text, (cols - 2) * (rows - 2)), width=cols - 2)
 
+
 def cursize(rgb: int) -> int:
     """
     Normalize an 8bit RGB value (ie 0-255) to a curses 0-1000 range for curses
     with curses.init_color.
     """
     return round(rgb / 255 * 1000)
-

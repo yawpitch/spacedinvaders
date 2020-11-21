@@ -3,6 +3,8 @@
 """
 A textual, terminal spin on an arcade classic.
 """
+# pylint: disable=too-many-lines
+
 # stdlib imports
 import argparse
 import curses
@@ -17,9 +19,10 @@ from functools import partial
 from itertools import cycle
 from random import randint
 from textwrap import dedent, indent
-from typing import List, NamedTuple, Optional, Tuple
+from typing import List, NamedTuple, Optional, Set, Tuple
 
 # local imports
+# pylint: disable=import-error
 from .constants import Color, Control, Direction, Stage
 from .exceptions import SuccessfulInvasion
 from .letters import A, C, D, E, G, I, M, N, O, P, R, S, V
@@ -156,6 +159,8 @@ class PlayState:
     """
     Class to track the current game state.
     """
+
+    # pylint: disable=too-many-instance-attributes
 
     def __init__(self, *, demo_mode=False):
         self._screen: int = 2 if demo_mode else 0
@@ -419,6 +424,8 @@ def reflow_max(stdscr: window) -> None:
     """
     Resize the screen back to current terminal extents.
     """
+    # pylint: disable=no-member
+
     # update curses.LINES and curses.COLS to reflect terminal size
     curses.update_lines_cols()
 
@@ -466,11 +473,11 @@ def resize_arena(stdscr: window, *, reflow: bool = False) -> None:
 
         # block until a resize or SIGTERM exits
         stdscr.timeout(-1)
-        while (curr_key := stdscr.getch()) != curses.KEY_RESIZE:
+        while stdscr.getch() != curses.KEY_RESIZE:
             continue
-        else:
-            stdscr.nodelay(True)
-            return resize_arena(stdscr, reflow=True)
+        stdscr.nodelay(True)
+        resize_arena(stdscr, reflow=True)
+        return
 
     # Mark the window for redraw
     stdscr.redrawwin()
@@ -527,7 +534,9 @@ def typeon(
     """
     length = len(message)
     x_pos = center_x - round(sum(len(c[0]) for c in message) / 2)
+    letter_count = 0
     for letter_count, letter in enumerate(message[:up_to], start=1):
+        line = ""
         for line_idx, line in enumerate(letter):
             with colorize(stdscr, Color.RED if line_idx < 2 else Color.WHITE):
                 stdscr.addstr(start_y + line_idx, x_pos, line)
@@ -555,6 +564,8 @@ def record(stdscr: window, score: int) -> int:
     """
     Loop for recording a new high score.
     """
+    # pylint: disable=too-many-locals, too-many-statements, too-many-branches
+
     # get the up to date extents
     height, width = stdscr.getmaxyx()
 
@@ -575,6 +586,8 @@ def record(stdscr: window, score: int) -> int:
 
     # draw the fancy box
     with colorize(popup, Color.WHITE):
+        # pylint: disable=invalid-name
+
         x, y, w, h = 0, 0, width - 1, height - 2
         popup.addstr(y, x, "╭" + ("─" * (w - 1)) + "╮", curses.A_DIM)
         for i in range(y + 1, h):
@@ -593,6 +606,7 @@ def record(stdscr: window, score: int) -> int:
         popup.addstr(start_y, start_x, end, curses.A_BOLD)
 
     valid = string.ascii_uppercase + string.digits + string.punctuation
+    convertible = set(ord(c) for c in valid + string.ascii_lowercase)
     chars = ["A", "A", "A"]
     highlight = 0
 
@@ -621,20 +635,27 @@ def record(stdscr: window, score: int) -> int:
         start_x += len(mid)
         popup.addstr(start_y, start_x, end, curses.A_DIM)
 
+    # pylint hasn't quite caught up to the walrus, it seems
+    # pylint: disable=used-before-assignment
+
     # loop where curr_key is the last character pressed or -1 on no input
     while (curr_key := stdscr.getch()) != Control.QUIT and not Control.is_enter(
         curr_key
     ):
-        if Control.is_left(curr_key):
-            highlight = (highlight - 1) % len(chars)
-        elif Control.is_right(curr_key):
-            highlight = (highlight + 1) % len(chars)
-        elif Control.is_up(curr_key):
+
+        if curr_key == Control.LARR:
+            highlight = max(0, highlight - 1)
+        elif curr_key == Control.RARR:
+            highlight = min(len(chars) - 1, highlight + 1)
+        elif curr_key == Control.UARR:
             curr = valid.index(chars[highlight])
             chars[highlight] = valid[(curr - 1) % len(valid)]
-        elif Control.is_down(curr_key):
+        elif curr_key == Control.DARR:
             curr = valid.index(chars[highlight])
             chars[highlight] = valid[(curr + 1) % len(valid)]
+        elif curr_key in convertible:
+            chars[highlight] = chr(curr_key).upper()
+            highlight = min(len(chars) - 1, highlight + 1)
 
         with colorize(stdscr, Color.WHITE):
             for idx, char in enumerate(chars):
@@ -656,6 +677,8 @@ def attract(stdscr: window, *, use_sound: bool = True) -> int:
     """
     The attraction screen loop, which entices the punters to play.
     """
+    # pylint: disable=too-many-statements, too-many-branches, too-many-locals
+
     # don't block waiting for user input
     stdscr.nodelay(True)
 
@@ -680,6 +703,8 @@ def attract(stdscr: window, *, use_sound: bool = True) -> int:
 
     # count the number of times we've displayed all the splash
     splash_count = 0
+
+    # pylint: disable=used-before-assignment
 
     # loop where curr_key is the last character pressed or -1 on no input
     while (curr_key := stdscr.getch()) != Control.QUIT and curr_key != Control.FIRE:
@@ -726,9 +751,7 @@ def attract(stdscr: window, *, use_sound: bool = True) -> int:
 
         if spaced_count == spaced_typed:
             invaders = [I, N, V, A, D, E, R, S]
-            invaders_count, invaders_typed = typeon(
-                stdscr, center_x, start_y + 3, invaders, typeon_invaders, delay=50
-            )
+            typeon(stdscr, center_x, start_y + 3, invaders, typeon_invaders, delay=50)
             typeon_invaders += 1
 
         typeon_spaced += 1
@@ -787,7 +810,7 @@ def attract(stdscr: window, *, use_sound: bool = True) -> int:
                                 points,
                             )
                 start_y += len(icon)
-                if 0 < critter_idx:
+                if critter_idx > 0:
                     start_y += 1
 
             # increment the splash screen counter when fully drawn
@@ -853,14 +876,16 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
     """
     The play loop, which presents the actual game.
     """
+    # pylint: disable=too-many-nested-blocks, too-many-statements, too-many-branches, too-many-locals
+
     # don't block waiting for user input
     stdscr.nodelay(True)
 
     # get the up to date extents
     height, width = stdscr.getmaxyx()
 
-    # calculate the new center points
-    center_y, center_x = round(height / 2), round(width / 2)
+    # calculate the new center x point
+    center_x = round(width / 2)
 
     # track the play state
     state = PlayState(demo_mode=demo_mode)
@@ -899,6 +924,9 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
         ]
     )
 
+    # track the victims of the rare and powerful hadouken
+    wave_kills: List[Set[Invader]] = []
+
     # tracks the current player movement command in demo mode
     demo_cmd = next(demo_commands)
 
@@ -917,7 +945,7 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
         if curr_key == curses.KEY_RESIZE:
             resize_arena(stdscr, reflow=True)
             height, width = stdscr.getmaxyx()
-            center_y, center_x = round(height / 2), round(width / 2)
+            center_x = round(width / 2)
             stdscr.clear()
             stdscr.refresh()
 
@@ -926,7 +954,7 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
             state.last10.append(curr_key)
             if curr_key == Control.LKEY:
                 if Control.has_komando(state.last10):
-                    state.credits = 1
+                    state.credits += 1
                     state.egged = True
                     Sound.COIN.play()
 
@@ -967,10 +995,12 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
                 stdscr, center_x, 4, message, typeon_game_over, delay=50
             )
 
+            # if we've finished typing on
             if letter_count == letters_typed:
                 curses.flushinp()
                 stdscr.refresh()
                 if state.has_high():
+                    curses.delay_output(1000)
                     return record(stdscr, state.high)
                 if demo_mode:
                     curses.delay_output(1500)
@@ -979,8 +1009,9 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
                 pressed = stdscr.getch()
                 stdscr.nodelay(True)
                 return pressed
-            else:
-                typeon_game_over += 1
+
+            # otherwise keep typing on
+            typeon_game_over += 1
 
         # erase the screen for redraw
         if state.stage is not Stage.GAME_OVER:
@@ -1092,7 +1123,10 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
             # ... or player inputs
             elif curr_key == Control.FIRE and state.bullet is None:
                 if state.can_fire():
-                    state.bullet = player.fire()
+                    hadouken = bool(state.credits)
+                    state.bullet = player.fire(hadouken=hadouken)
+                    if hadouken:
+                        state.credits -= 1
                     state.bullet.render(stdscr)
 
             # update the player's position on directional input
@@ -1158,11 +1192,46 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
         if state.stage not in Stage.DEATH | Stage.GAME_OVER:
 
             # handle successful player shots
-            has_kill = Gestalt.find_collision(state.bullet) if state.bullet else None
+            has_kill, hit_col, hit_row = (
+                Gestalt.find_collision(state.bullet)
+                if state.bullet
+                else (None, None, None)
+            )
+            if has_kill and (state.bullet and state.bullet.is_hadouken()):
+                # this check is primarily for typing, neither can be None here
+                assert hit_col is not None
+                assert hit_row is not None
+                for look_col, look_row in [(-1, 0), (0, +1), (+1, 0), (0, -1)]:
+                    magnitude = 1
+                    while True:
+                        check_col = hit_col + look_col * magnitude
+                        check_row = hit_row + look_row * magnitude
+                        wave_hit = None
+                        try:
+                            wave_hit = Gestalt.hive_members[check_col][check_row]
+                        except IndexError:
+                            break
+                        if wave_hit is None:
+                            break
+
+                        while len(wave_kills) < magnitude:
+                            wave_kills.append(set())
+                        wave_kills[magnitude - 1].add(wave_hit)
+                        magnitude += 1
+
+            # score a successful shot
             if has_kill:
+                if state.bullet and state.bullet.is_hadouken():
+                    has_kill.color = Color.MAGENTA
                 state.score += has_kill.points(state.bullet_count)
                 state.last_kills.append(has_kill)
                 state.bullet = None
+
+            # score a previous hadouken's wave
+            if wave_kills:
+                for kill in Gestalt.process_wavelet(wave_kills.pop(0)):
+                    state.score += kill.points(state.bullet_count)
+                    state.last_kills.append(kill)
 
             # handle end of the gestalt
             if Gestalt.remaining() == 0:
@@ -1300,7 +1369,7 @@ def mainloop(stdscr: window, *, use_sound: bool = True) -> None:
     curses.curs_set(0)
 
     # start colors if available
-    if curses.has_colors:
+    if curses.has_colors():
         curses.start_color()
 
         curses.init_pair(Color.RED, curses.COLOR_RED, curses.COLOR_BLACK)
@@ -1362,7 +1431,7 @@ def main() -> None:
         Play a game of Spaced Invaders.
 
         Your console and font must support unicode characters.
-        If the following doesn't look like a UFO, then it is 
+        If the following doesn't look like a UFO, then it is
         unlikely the game is going to work.
 
         {icon}
@@ -1386,7 +1455,7 @@ def main() -> None:
     )
 
     parser.add_argument(
-        "-V", "--version", action="version", version="%(prog)s " + VERSION
+        "-V", "--version", action="version", version="%(prog)s " + __version__
     )
 
     opts = parser.parse_args()

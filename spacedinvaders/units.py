@@ -11,7 +11,7 @@ import locale
 import time
 from curses import window
 from random import choice
-from typing import ByteString, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import ByteString, Dict, List, Optional, Set, Tuple, Type
 
 # local imports
 from spacedinvaders.constants import Color, Direction
@@ -22,6 +22,8 @@ from spacedinvaders.sounds import Sound
 CODEC = locale.getpreferredencoding()
 
 Icon = str
+
+# pylint: disable=too-many-lines, too-many-ancestors
 
 
 def make_icon(icon: Icon) -> Icon:
@@ -43,6 +45,7 @@ class Renderable:
     ICON: Icon
 
     def __init__(self, x: int, y: int, *args, **kwargs):
+        # pylint: disable=unused-argument
         self._x: int = x
         self._y: int = y
         split = self.ICON.splitlines()
@@ -191,6 +194,8 @@ class Reskinable(Renderable):
     Mixin that allows a unit to be reskinned on move.
     """
 
+    # pylint: disable=no-member
+
     ALT: Icon
 
     def flip(self) -> None:
@@ -198,7 +203,7 @@ class Reskinable(Renderable):
         Flips the unit's icon.
         """
         if isinstance(self, Killable) and self.is_dead():
-            return None
+            return
         if self.icon is self.ICON:
             self.icon = self.ALT
         else:
@@ -248,6 +253,9 @@ class Killable(Renderable):
         self.time_of_death = time.time()
 
     def reap(self) -> bool:
+        """
+        Check if the unit should be reaped and removed from the render queue.
+        """
         if self.is_dead() and self.time_of_death is not None:
             return time.time() - self.time_of_death > self.REAP_DELAY
         return False
@@ -257,6 +265,8 @@ class Moveable(Renderable):
     """
     Mixin to allow a Renderable to be moved.
     """
+
+    # pylint: disable=no-member
 
     WALL_BUFFER = 5
 
@@ -284,6 +294,7 @@ class Moveable(Renderable):
         Used to limit on what frames movement will occur.
         Subclasses can use this to slow movement, or perform periodic actions.
         """
+        # pylint: disable=unused-argument, no-self-use
         return True
 
     @property
@@ -305,9 +316,11 @@ class Moveable(Renderable):
         Moves the unit in the direction it's facing.
         Calls Moveable.wall(new_position, limit) near wall collisions.
         """
+        # pylint: disable=unused-argument, too-many-branches
+
         # only move on every scheduled frame
         if not self.on_every(frame):
-            return None
+            return
 
         if self.direction is Direction.NORTH:
             new_y = self.y - self.speed
@@ -381,6 +394,8 @@ class Gestalt(Moveable, Audible):
         """
         Populate the Gestalt.
         """
+        # pylint: disable=invalid-name
+
         # optionally turn off hive audio
         Gestalt.hive_use_sound = use_sound
 
@@ -462,11 +477,13 @@ class Gestalt(Moveable, Audible):
         """
         Move as one. Fight as one. Die as one?
         """
+        # pylint: disable=too-many-locals, too-many-branches, too-many-statements, too-many-arguments
+
         assert cls.hive_direction is not Direction.NORTH
 
         flip = cls.on_every(frame)
         if not flip:
-            return None
+            return
 
         members = Gestalt.hive_members
         have_invaded = False
@@ -572,11 +589,14 @@ class Gestalt(Moveable, Audible):
                     member.render(stdscr)
 
     @classmethod
-    def find_collision(cls, bullet: Bullet) -> Optional[Invader]:
+    def find_collision(
+        cls, bullet: Bullet
+    ) -> Tuple[Optional[Invader], Optional[int], Optional[int]]:
         """
         Find any invader struck by the player's bullet.
+        Returns either (Invader, column, row) on a hit or (None, None, None).
         """
-        for column in cls.hive_members:
+        for col, column in enumerate(cls.hive_members):
             for row in reversed(range(len(column))):
                 candidate = column[row]
                 if candidate is None:
@@ -587,8 +607,28 @@ class Gestalt(Moveable, Audible):
                     candidate.color = Color.RED
                     candidate.die()
                     column[row] = None
-                    return candidate
-        return None
+                    return candidate, col, row
+        return None, None, None
+
+    @classmethod
+    def process_wavelet(cls, wave_hit: Set[Invader]) -> List[Invader]:
+        """
+        Process the wave hit invaders, returning those actually killed.
+        """
+        wave_killed = []
+        for column in cls.hive_members:
+            for row in reversed(range(len(column))):
+                candidate = column[row]
+                if candidate is None:
+                    continue
+                if candidate in wave_hit:
+                    if cls.hive_use_sound:
+                        Sound.KILLSHOT.play()
+                    candidate.color = Color.MAGENTA
+                    candidate.die()
+                    column[row] = None
+                    wave_killed.append(candidate)
+        return wave_killed
 
     @classmethod
     def can_drop(cls, score: int) -> bool:
@@ -626,6 +666,8 @@ class Collidable(Renderable):
     A Renderable that can engage in collisions.
     """
 
+    # pylint: disable=no-member, invalid-name
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._struck: List[Collidable] = []
@@ -657,8 +699,10 @@ class Collidable(Renderable):
         """
         The x coordinate of this unit's collision box.
         """
+        # pylint: disable=unreachable
+
         return self.x
-        if hasattr(self, "speed"):
+        if isinstance(self, Moveable):
             if self.direction is Direction.EAST:
                 return self.x + self.speed
             if self.direction is Direction.WEST:
@@ -670,8 +714,10 @@ class Collidable(Renderable):
         """
         The y coordinate of this unit's collision box.
         """
+        # pylint: disable=unreachable
+
         return self.y
-        if hasattr(self, "speed"):
+        if isinstance(self, Moveable):
             if self.direction is Direction.NORTH:
                 return self.y - self.speed
             if self.direction is Direction.SOUTH:
@@ -727,6 +773,8 @@ class Destructible(Collidable):
         """
         Process any damage done by strikes.
         """
+        # pylint: disable=too-many-branches, too-many-statements
+
         damaged = False
         while self._struck:
             other = self._struck.pop(0)
@@ -800,15 +848,12 @@ class Destructible(Collidable):
                         # somewhat pleasing
                         if not other.x - 2 < col + self.x < other.x + other.w + 2:
                             continue
-                        try:
-                            # clear out the overlap
-                            if self._state[row][col] != " ":
-                                self._state[row][col] = " "
-                                rows_damaged.add(row)
-                                cols_damaged.add(col)
-                                damaged = True
-                        except IndexError:
-                            raise ValueError(f"{row},{col} {self._state}")
+                        # clear out the overlap
+                        if self._state[row][col] != " ":
+                            self._state[row][col] = " "
+                            rows_damaged.add(row)
+                            cols_damaged.add(col)
+                            damaged = True
 
                 # check for devastation
                 for row_idx in rows_damaged:
@@ -846,9 +891,10 @@ class Bullet(Moveable, Collidable, Killable, Renderable):
         """
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, hadouken: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self._direction = Direction.NORTH
+        self._hadouken = hadouken
 
     def wall(self, new_position: int, limit: int) -> int:
         """
@@ -859,6 +905,12 @@ class Bullet(Moveable, Collidable, Killable, Renderable):
             self.die()
             return max([new_position, limit + 2])
         return new_position
+
+    def is_hadouken(self) -> bool:
+        """
+        Kore wa hadō kendesu ka?
+        """
+        return self._hadouken
 
     def die(self):
         """
@@ -900,14 +952,19 @@ class Player(Moveable, Collidable, Killable, Audible, Renderable):
             return max(new_position, limit + 1)
         return min(new_position, limit - self.w - 2)
 
-    def fire(self) -> Bullet:
+    def fire(self, hadouken: bool = False) -> Bullet:
         """
         Fire a Bullet upwards, if enough time has elapsed
         since the last shot.
         """
         if self.use_sound:
-            Sound.SHOOT.play()
-        return Bullet((self.x + (self.x + self.w)) // 2, self.y - 1, speed=3)
+            if hadouken:
+                Sound.HADOUKEN.play()
+            else:
+                Sound.SHOOT.play()
+        return Bullet(
+            (self.x + (self.x + self.w)) // 2, self.y - 1, speed=3, hadouken=hadouken
+        )
 
     def die(self) -> None:
         """
@@ -922,6 +979,8 @@ class Player(Moveable, Collidable, Killable, Audible, Renderable):
         """
         Resurrect the player.
         """
+        # pylint: disable=invalid-name
+
         self.icon = self.ICON
         self.speed = 0
         self.x = x
@@ -933,22 +992,35 @@ class Collectible:
     Mixin to make a unit have a points value.
     """
 
+    # pylint: disable=too-few-public-methods
+
     POINTS: Optional[int] = None
 
     def points(self, shot_count: int) -> int:
         """
         Return the points this Collectible is worth at this shot count.
         """
+        # pylint: disable=unused-argument
+
         if self.POINTS is None:
             raise NotImplementedError("Collectible.points must be overloaded")
         return self.POINTS
 
 
 class Alien(Moveable, Collidable, Killable, Collectible, Audible, Renderable):
+    """
+    Represents any alien units.
+    """
+
+    # pylint: disable=abstract-method
     ...
 
 
 class Invader(Gestalt, Reskinable, Alien):
+    """
+    Represents the alien units that are actually Gestalt members.
+    """
+
     ...
 
 
@@ -1127,6 +1199,8 @@ class Mystery(Alien):
         """
         Spawn a new Mystery ship.
         """
+        # pylint: disable=invalid-name, too-many-arguments
+
         on_right = shot_count % 2 == 0
         mystery = Mystery(x, y, speed=1, use_sound=use_sound)
         mystery.x = width - x - mystery.w if on_right else mystery.x
