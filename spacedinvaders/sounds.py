@@ -42,3 +42,5 @@ class Sound:
     KILLSHOT = _load(_resource("media/killshot.wav"))
     SHOOT = _load(_resource("media/shoot.wav"))
     MYSTERY = _load(_resource("media/mystery.wav"))
+    HADOUKEN = _load(_resource("media/hadouken.wav"))
+    COIN = _load(_resource("media/coin.wav"))
