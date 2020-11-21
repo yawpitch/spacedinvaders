@@ -42,7 +42,7 @@ Being that it's [`curses`][curses] the movement controls can feel a bit sloppy. 
 
 ### Audio
 
-Sounds will only work with [`simpleaudio`][simpleaudio] and its dependencies installed. Worked out of the box for me, buy Your Mileage May Vary.
+Sounds will only work with [`simpleaudio`][simpleaudio] and its dependencies installed. Worked out of the box for me, but Your Mileage May Vary.
 
 ## Credits
 Couldn't have gotten anywhere near this accurate without the awesome resources at:
