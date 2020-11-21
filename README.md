@@ -1,6 +1,8 @@
 # spacedinvaders
 A textual terminal spin on an arcade classic ... _and_ my [CS50X][cs50x] final project for the year that CoViD-19 made me want to forget.
 
+![gameplay demo](images/demo.gif)
+
 Implemented using Python's builtin [`curses`][curses] module; no other dependencies _unless_ you want audio, see the caveat below.
 
 ## Installation
