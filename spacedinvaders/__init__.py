@@ -238,7 +238,7 @@ class PlayState:
         old_score = self._score
         self._score = val
         if not self._demo:
-            if old_score <= 1500 <= self._score:
+            if old_score < 1500 <= self._score:
                 self.lives += 1
             self.high = max(self.high, self._score)
 
