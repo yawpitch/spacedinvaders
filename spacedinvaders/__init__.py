@@ -65,6 +65,7 @@ class ScoresDB:
     """
 
     def __init__(self):
+        self._leaders: Optional[List[Tuple[str, int]]] = None
         self.path = os.path.join(
             os.path.expandvars(
                 os.path.expanduser(
@@ -95,10 +96,15 @@ class ScoresDB:
         ).strip()
         self.con.execute(query)
 
-    def get_leaders(self) -> List[Tuple[str, int]]:
+    @property
+    def leaders(self) -> List[Tuple[str, int]]:
         """
-        Returns the current top 10 scores.
+        The top 10 current leaders.
         """
+        # use cached data if available
+        if self._leaders is not None:
+            return self._leaders
+
         query = dedent(
             """
             SELECT
@@ -112,32 +118,28 @@ class ScoresDB:
             """
         ).strip()
 
-        leaders: List[sqlite3.Row] = self.con.execute(query).fetchall()
-        return [(l["name"], l["score"]) for l in leaders]
+        self._leaders = [
+            (l["name"], l["score"]) for l in self.con.execute(query).fetchall()
+        ]
+        return self._leaders
 
-    def get_high(self) -> int:
+    @property
+    def high(self) -> int:
         """
-        Returns the current high score, or 0 if none exists.
+        The current high score, or 0 if no score has been set.
         """
-        query = dedent(
-            """
-            SELECT
-              score
-            FROM
-              scores
-            ORDER BY
-              score DESC;
-            """
-        ).strip()
+        return self.leaders[0][1] if self.leaders else 0
 
-        score: Optional[sqlite3.Row] = self.con.execute(query).fetchone()
-        if score is not None:
-            return score["score"]
-        return 0
-
-    def set_high(self, name: str, score: int) -> None:
+    @property
+    def low(self) -> int:
         """
-        Records a new high score in the database.
+        The current lowest ranked score, or 0 if no score has been set.
+        """
+        return self.leaders[-1][1] if self.leaders else 0
+
+    def insert(self, name: str, score: int) -> None:
+        """
+        Records a new score in the database.
         """
         query = dedent(
             """
@@ -150,6 +152,9 @@ class ScoresDB:
 
         with self.con:
             self.con.execute(query, (name, score))
+
+        # clear the cache
+        self._leaders = None
 
 
 DB = ScoresDB()
@@ -166,8 +171,7 @@ class PlayState:
         self._screen: int = 2 if demo_mode else 0
         self._frame: int = 0
         self._score: int = 0
-        self._high: int = 9999 if demo_mode else DB.get_high()
-        self._new_high: bool = False
+        self._high: int = 9999 if demo_mode else DB.high
         self._lives: int = 2 if demo_mode else 3
         self._stage: Stage = Stage.REDRAW
         self._respawn_delay: int = round(1.5 * FRAMERATE)
@@ -254,17 +258,19 @@ class PlayState:
         """
         Update the current high score.
         """
-        if val > self._high:
-            self._new_high = True
         self._high = val
 
-    def has_high(self) -> bool:
+    def has_topped(self) -> bool:
         """
-        Check if the player has set a new high score.
+        Check if the player has set a new top / highest score.
         """
-        if self._demo:
-            return False
-        return self._new_high
+        return False if self._demo else self.score > DB.high
+
+    def has_ranked(self) -> bool:
+        """
+        Check if the player has set a new ranked score.
+        """
+        return False if self._demo else self.score > DB.low
 
     @property
     def lives(self) -> int:
@@ -567,7 +573,7 @@ def govern(last_time: Optional[float]) -> float:
     return time.time()
 
 
-def record(stdscr: window, score: int) -> int:
+def record(stdscr: window, score: int, *, is_top: bool = True) -> int:
     """
     Loop for recording a new high score.
     """
@@ -604,7 +610,10 @@ def record(stdscr: window, score: int) -> int:
         popup.addstr(h, x, "╰" + ("─" * (w - 1)) + "╯", curses.A_DIM)
 
     # draw the static lines
-    start, end = "CONGRATULATIONS ON A NEW ", "HIGH SCORE"
+    if is_top:
+        start, end = "CONGRATULATIONS ON A NEW ", "HIGH SCORE"
+    else:
+        start, end = "YOU'VE MADE IT ONTO THE ", "LEADER BOARD"
     start_y = center_y - 2
     start_x = center_x - round(len(start + end) / 2)
     with colorize(stdscr, Color.WHITE):
@@ -675,7 +684,7 @@ def record(stdscr: window, score: int) -> int:
 
     # commit the new high score to the database
     if Control.is_enter(curr_key):
-        DB.set_high("".join(chars), score)
+        DB.insert("".join(chars), score)
 
     return curr_key
 
@@ -706,7 +715,7 @@ def attract(stdscr: window, *, use_sound: bool = True) -> int:
     typeon_advance_table = typeon_leaderboard = 0
 
     # get the current leaderboard
-    leaderboard = DB.get_leaders()
+    leaderboard = DB.leaders
 
     # count the number of times we've displayed all the splash
     splash_count = 0
@@ -827,7 +836,7 @@ def attract(stdscr: window, *, use_sound: bool = True) -> int:
         if leaderboard:
             splash_on = splash_off + splash_on
             splash_off = splash_on + max(
-                FRAMERATE * 6, round(FRAMERATE * len(leaderboard) + 0.8)
+                FRAMERATE * 6, FRAMERATE * (len(leaderboard) + 1)
             )
         if leaderboard and splash_on <= frame <= splash_off:
 
@@ -853,9 +862,9 @@ def attract(stdscr: window, *, use_sound: bool = True) -> int:
             for idx, (name, score) in enumerate(leaderboard[:typeon_leaderboard]):
 
                 start_y += 1
-                name_str = f"{idx + 1: 2d}: {name}"
+                name_str = f"{idx + 1:2d}: {name}"
                 name_x = start_x + 2
-                score_str = f"{score: 4d} POINTS"
+                score_str = f"{score:4d} POINTS"
                 score_x = start_x + end_w - 3 - len(score_str)
                 with colorize(stdscr, Color.YELLOW if not idx else Color.WHITE):
                     # distinguish alternating lines
@@ -1006,9 +1015,12 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
             if letter_count == letters_typed:
                 curses.flushinp()
                 stdscr.refresh()
-                if state.has_high():
+                if state.has_topped():
                     curses.delay_output(1000)
-                    return record(stdscr, state.high)
+                    return record(stdscr, state.score)
+                if state.has_ranked():
+                    curses.delay_output(1000)
+                    return record(stdscr, state.score, is_top=False)
                 if demo_mode:
                     curses.delay_output(1500)
                     return Control.NULL
