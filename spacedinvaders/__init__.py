@@ -41,7 +41,7 @@ from .units import (
 )
 from .utils import colorize, cursize, fit_within
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 locale.setlocale(locale.LC_ALL, "")
 
