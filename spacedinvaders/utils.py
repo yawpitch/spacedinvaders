@@ -42,7 +42,13 @@ def fit_within(text: str, rows: int, cols: int) -> List[str]:
     Wrap (and if necessary truncate) text to fit within a box defined by lines
     and cols.
     """
-    return wrap(shorten(text, (cols - 2) * (rows - 2)), width=cols - 2)
+    # shorten can fail if the length is smaller than the default placeholder
+    # and wrap can fail if the width ever gets <= 0 ... in either case there
+    # is no remaining room to display any text, so return the empty string
+    try:
+        return wrap(shorten(text, (cols - 2) * (rows - 2)), width=cols - 2)
+    except ValueError:
+        return [""]
 
 
 def cursize(rgb: int) -> int:

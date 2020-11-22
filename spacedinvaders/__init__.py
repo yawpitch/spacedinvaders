@@ -435,7 +435,14 @@ def reflow_max(stdscr: window) -> None:
 
     # reflow back to terminal extents
     stdscr.resize(curses.LINES, curses.COLS)
-    stdscr.mvwin(0, 0)
+
+    # moving back to the origin occasionally fails on floating windows
+    # but since this is really just a safety fallback it should be fine
+    # to occasionally skip it and let it happen on the next resize
+    try:
+        stdscr.mvwin(0, 0)
+    except curses.error:
+        pass
 
 
 def resize_arena(stdscr: window, *, reflow: bool = False) -> None:
