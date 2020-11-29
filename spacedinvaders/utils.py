@@ -5,12 +5,23 @@ Miscellaneous utilities.
 """
 # stdlib imports
 from contextlib import contextmanager
-from curses import color_pair, has_colors, window
+from curses import color_pair, has_colors
 from textwrap import dedent, shorten, wrap
-from typing import Generator, List
+from typing import Any, Generator, List, TYPE_CHECKING
 
 # local imports
 from spacedinvaders.constants import Color
+
+
+# aliases for mypy only
+if TYPE_CHECKING:
+    # in 3.8+ we can import the window directly
+    try:
+        from curses import window as Window
+    except ImportError:
+        Window = Any
+else:
+    Window = Any
 
 
 def regularize(string: str) -> str:
@@ -25,7 +36,7 @@ def regularize(string: str) -> str:
 
 
 @contextmanager
-def colorize(stdscr: window, color: Color) -> Generator[window, None, None]:
+def colorize(stdscr: Window, color: Color) -> Generator[Window, None, None]:
     """
     Context manager to make colorizing operations easier.
     """

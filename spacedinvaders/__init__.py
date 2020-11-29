@@ -12,14 +12,14 @@ import locale
 import os
 import string
 import sqlite3
+import sys
 import time
 from collections import deque
-from curses import window
 from functools import partial
 from itertools import cycle
 from random import randint
 from textwrap import dedent, indent
-from typing import List, NamedTuple, Optional, Set, Tuple
+from typing import Any, List, NamedTuple, Optional, Set, Tuple, TYPE_CHECKING
 
 # local imports
 # pylint: disable=import-error
@@ -41,7 +41,7 @@ from .units import (
 )
 from .utils import colorize, cursize, fit_within
 
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 
 locale.setlocale(locale.LC_ALL, "")
 
@@ -57,6 +57,17 @@ ARENA_WIDTH = BARRIER_WIDTH * 10
 ARENA_HEIGHT = round(ARENA_WIDTH * ARCADE_ASPECT / PIXEL_ASPECT)
 if ARENA_HEIGHT % 2:
     ARENA_HEIGHT += 1
+
+
+# aliases for mypy only
+if TYPE_CHECKING:
+    # in 3.8+ we can import the window directly
+    try:
+        from curses import window as Window
+    except ImportError:
+        Window = Any
+else:
+    Window = Any
 
 
 class ScoresDB:
@@ -426,7 +437,7 @@ class PlayState:
         return self._last_kills
 
 
-def reflow_max(stdscr: window) -> None:
+def reflow_max(stdscr: Window) -> None:
     """
     Resize the screen back to current terminal extents.
     """
@@ -451,7 +462,7 @@ def reflow_max(stdscr: window) -> None:
         pass
 
 
-def resize_arena(stdscr: window, *, reflow: bool = False) -> None:
+def resize_arena(stdscr: Window, *, reflow: bool = False) -> None:
     """
     Resize and center the gameplay arena; also handle resizes that are too small.
     """
@@ -496,7 +507,7 @@ def resize_arena(stdscr: window, *, reflow: bool = False) -> None:
     stdscr.redrawwin()
 
 
-def draw_hud(stdscr: window, height: int, width: int, state: PlayState) -> None:
+def draw_hud(stdscr: Window, height: int, width: int, state: PlayState) -> None:
     """
     Render the Player's status to the arena HUD.
     """
@@ -532,7 +543,7 @@ def draw_hud(stdscr: window, height: int, width: int, state: PlayState) -> None:
 
 
 def typeon(
-    stdscr: window,
+    stdscr: Window,
     center_x: int,
     start_y: int,
     message: List[List[str]],
@@ -573,7 +584,7 @@ def govern(last_time: Optional[float]) -> float:
     return time.time()
 
 
-def record(stdscr: window, score: int, *, is_top: bool = True) -> int:
+def record(stdscr: Window, score: int, *, is_top: bool = True) -> int:
     """
     Loop for recording a new high score.
     """
@@ -655,9 +666,14 @@ def record(stdscr: window, score: int, *, is_top: bool = True) -> int:
     # pylint: disable=used-before-assignment
 
     # loop where curr_key is the last character pressed or -1 on no input
-    while (curr_key := stdscr.getch()) != Control.QUIT and not Control.is_enter(
-        curr_key
-    ):
+    while True:
+
+        # get the key pressed
+        curr_key = stdscr.getch()
+
+        # handle user exit
+        if curr_key == Control.QUIT or Control.is_enter(curr_key):
+            break
 
         if curr_key == Control.LARR:
             highlight = max(0, highlight - 1)
@@ -689,7 +705,7 @@ def record(stdscr: window, score: int, *, is_top: bool = True) -> int:
     return curr_key
 
 
-def attract(stdscr: window, *, use_sound: bool = True) -> int:
+def attract(stdscr: Window, *, use_sound: bool = True) -> int:
     """
     The attraction screen loop, which entices the punters to play.
     """
@@ -723,7 +739,14 @@ def attract(stdscr: window, *, use_sound: bool = True) -> int:
     # pylint: disable=used-before-assignment
 
     # loop where curr_key is the last character pressed or -1 on no input
-    while (curr_key := stdscr.getch()) != Control.QUIT and curr_key != Control.FIRE:
+    while True:
+
+        # get the key pressed
+        curr_key = stdscr.getch()
+
+        # handle user exit
+        if curr_key == Control.QUIT or curr_key == Control.FIRE:
+            break
 
         # modulate the time to keep rhe loop relatively constant
         last_time = govern(last_time)
@@ -888,7 +911,7 @@ def attract(stdscr: window, *, use_sound: bool = True) -> int:
     return curr_key
 
 
-def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
+def play(stdscr: Window, use_sound: bool, demo_mode: bool = False) -> int:
     """
     The play loop, which presents the actual game.
     """
@@ -952,7 +975,14 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
         exit_inputs.add(Control.FIRE)
 
     # loop where curr_key is the last character pressed or -1 on no input
-    while (curr_key := stdscr.getch()) not in exit_inputs:
+    while True:
+
+        # get the key pressed
+        curr_key = stdscr.getch()
+
+        # handle user exit
+        if curr_key in exit_inputs:
+            break
 
         # modulate the time to keep rhe loop relatively constant
         last_time = govern(last_time)
@@ -1380,7 +1410,7 @@ def play(stdscr: window, use_sound: bool, demo_mode: bool = False) -> int:
     return curr_key
 
 
-def mainloop(stdscr: window, *, use_sound: bool = True) -> None:
+def mainloop(stdscr: Window, *, use_sound: bool = True) -> None:
     """
     The main game loop; prepares the screen and coordinates play stages.
     """
@@ -1479,8 +1509,15 @@ def main() -> None:
 
     opts = parser.parse_args()
 
-    # start the game and clean up the screen on errors
-    curses.wrapper(partial(mainloop, use_sound=opts.use_sound))
+    try:
+        # start the game and clean up the screen on errors
+        curses.wrapper(partial(mainloop, use_sound=opts.use_sound))
+    except KeyboardInterrupt:
+        # exit on error
+        sys.exit(1)
+    else:
+        # exit on success
+        sys.exit(0)
 
 
 if __name__ == "__main__":

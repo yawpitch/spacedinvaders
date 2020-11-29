@@ -21,10 +21,13 @@ setuptools.setup(
             "spacedinvaders = spacedinvaders:main",
         ]
     },
-    install_requires=["simpleaudio"],
+    extras_require={
+        "SOUNDS": ["simpleaudio"],
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3 :: Only",
+        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
@@ -39,5 +42,5 @@ setuptools.setup(
         "Topic :: Games/Entertainment :: Arcade",
         "Typing :: Typed",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.7",
 )

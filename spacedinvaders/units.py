@@ -9,9 +9,8 @@ from __future__ import annotations
 import curses
 import locale
 import time
-from curses import window
 from random import choice
-from typing import ByteString, Dict, List, Optional, Set, Tuple, Type
+from typing import Any, ByteString, Dict, List, Optional, Set, Tuple, Type, TYPE_CHECKING
 
 # local imports
 from spacedinvaders.constants import Color, Direction
@@ -20,6 +19,16 @@ from spacedinvaders.utils import regularize, colorize
 from spacedinvaders.sounds import Sound
 
 CODEC = locale.getpreferredencoding()
+
+# aliases for mypy only
+if TYPE_CHECKING:
+    # in 3.8+ we can import the window directly
+    try:
+        from curses import window as Window
+    except ImportError:
+        Window = Any
+else:
+    Window = Any
 
 Icon = str
 
@@ -152,7 +161,7 @@ class Renderable:
         """
         return self._dirty
 
-    def render(self, stdscr: window) -> None:
+    def render(self, stdscr: Window) -> None:
         """
         Render the unit to screen.
         """
@@ -311,7 +320,7 @@ class Moveable(Renderable):
         """
         self._direction = val
 
-    def move(self, stdscr: window, frame: int, width: int, height: int) -> None:
+    def move(self, stdscr: Window, frame: int, width: int, height: int) -> None:
         """
         Moves the unit in the direction it's facing.
         Calls Moveable.wall(new_position, limit) near wall collisions.
@@ -467,7 +476,7 @@ class Gestalt(Moveable, Audible):
     @classmethod
     def lockstep(
         cls,
-        stdscr: window,
+        stdscr: Window,
         frame: int,
         width: int,
         height: int,
@@ -577,7 +586,7 @@ class Gestalt(Moveable, Audible):
         raise RuntimeError(f"{self} -> {new_position} @ {limit}")
 
     @classmethod
-    def render_all(cls, stdscr: window, ranks_below: int = 0) -> None:
+    def render_all(cls, stdscr: Window, ranks_below: int = 0) -> None:
         """
         Render the hive, if only the ranks below a given index.
         """
@@ -1225,7 +1234,7 @@ class Droppable(Moveable, Collidable, Killable, Reskinable, Renderable):
         """
         return frame % 3 == 0
 
-    def move(self, stdscr: window, frame: int, width: int, height: int) -> None:
+    def move(self, stdscr: Window, frame: int, width: int, height: int) -> None:
         super().move(stdscr, frame, width, height)
         self.in_flight += 1
 
