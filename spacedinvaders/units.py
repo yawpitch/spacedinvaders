@@ -1141,6 +1141,7 @@ class Mystery(Alien):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._reached_wall = False
+        self._sound = None
         if self.use_sound:
             self._sound = Sound.MYSTERY.play()
 
@@ -1148,8 +1149,9 @@ class Mystery(Alien):
         """
         Kills any sound that's playing for this ship.
         """
-        if self.use_sound and self._sound.is_playing():
+        if self.use_sound and self._sound and self._sound.is_playing():
             self._sound.stop()
+            self._sound = None
 
     def points(self, shot_count: int) -> int:
         """
